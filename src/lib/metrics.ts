@@ -111,7 +111,7 @@ export function passesVendorFilter(lead: LeadRecord): boolean {
   }
 
   // New leads — check if inbound type
-  if (VENDOR_FILTER_RULES.inboundCallTypes.includes(callType)) {
+  if ((VENDOR_FILTER_RULES.inboundCallTypes as readonly string[]).includes(callType)) {
     return true; // All "Inbound Call" / "Inbound IVR" rows pass
   }
 
