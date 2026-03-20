@@ -185,10 +185,12 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
   const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
   const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
 
-  // Average calls to quote
-  const quotedWithCalls = quotedLeads.filter(l => l.total_call_attempts > 0);
+  // Average calls to quote — uses calls_at_first_quote (Deer Dama Total Calls
+  // captured at the moment the lead first reached a quote status).
+  // Falls back to total_call_attempts if calls_at_first_quote is not available.
+  const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
   const avgCallsToQuote = quotedWithCalls.length > 0
-    ? quotedWithCalls.reduce((sum, l) => sum + l.total_call_attempts, 0) / quotedWithCalls.length
+    ? quotedWithCalls.reduce((sum, l) => sum + (l.calls_at_first_quote ?? l.total_call_attempts), 0) / quotedWithCalls.length
     : 0;
 
   // Average days to quote (first seen → first quote)
