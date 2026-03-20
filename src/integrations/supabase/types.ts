@@ -365,6 +365,7 @@ export type Database = {
       leads: {
         Row: {
           agency_id: string
+          calls_at_first_quote: number | null
           created_at: string
           current_lead_type: string | null
           current_status: string | null
@@ -391,6 +392,7 @@ export type Database = {
         }
         Insert: {
           agency_id: string
+          calls_at_first_quote?: number | null
           created_at?: string
           current_lead_type?: string | null
           current_status?: string | null
@@ -417,6 +419,7 @@ export type Database = {
         }
         Update: {
           agency_id?: string
+          calls_at_first_quote?: number | null
           created_at?: string
           current_lead_type?: string | null
           current_status?: string | null

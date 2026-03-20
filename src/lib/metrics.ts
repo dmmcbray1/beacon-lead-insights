@@ -24,6 +24,8 @@ export interface LeadRecord {
   first_sold_date: string | null;
   total_call_attempts: number;
   total_callbacks: number;
+  /** Total Calls from Deer Dama, captured when lead first reaches a quote status */
+  calls_at_first_quote: number | null;
   has_bad_phone: boolean;
   statuses: string[];
   /** The Call Type value from Daily Call Report (contains campaign/territory info) */
@@ -183,10 +185,12 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
   const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
   const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
 
-  // Average calls to quote
-  const quotedWithCalls = quotedLeads.filter(l => l.total_call_attempts > 0);
+  // Average calls to quote — uses calls_at_first_quote (Deer Dama Total Calls
+  // captured at the moment the lead first reached a quote status).
+  // Falls back to total_call_attempts if calls_at_first_quote is not available.
+  const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
   const avgCallsToQuote = quotedWithCalls.length > 0
-    ? quotedWithCalls.reduce((sum, l) => sum + l.total_call_attempts, 0) / quotedWithCalls.length
+    ? quotedWithCalls.reduce((sum, l) => sum + (l.calls_at_first_quote ?? l.total_call_attempts), 0) / quotedWithCalls.length
     : 0;
 
   // Average days to quote (first seen → first quote)
