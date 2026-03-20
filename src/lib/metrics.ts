@@ -24,6 +24,8 @@ export interface LeadRecord {
   first_sold_date: string | null;
   total_call_attempts: number;
   total_callbacks: number;
+  /** Total Calls from Deer Dama, captured when lead first reaches a quote status */
+  calls_at_first_quote: number | null;
   has_bad_phone: boolean;
   statuses: string[];
   /** The Call Type value from Daily Call Report (contains campaign/territory info) */
