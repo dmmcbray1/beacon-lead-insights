@@ -1,8 +1,9 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, Users, Building2, Search,
-  Settings, BarChart3, Phone
+  Settings, Phone, LogOut
 } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -15,6 +16,7 @@ const navigation = [
 
 export default function AppSidebar() {
   const location = useLocation();
+  const { user, signOut } = useAuth();
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 w-60 bg-sidebar flex flex-col">
@@ -52,9 +54,19 @@ export default function AppSidebar() {
         })}
       </nav>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-sidebar-border">
-        <p className="text-[11px] text-sidebar-muted">v1.0 · Beacon Call Dashboard</p>
+      {/* User + Sign Out */}
+      <div className="px-3 py-4 border-t border-sidebar-border space-y-2">
+        {user && (
+          <p className="px-3 text-xs text-sidebar-muted truncate">{user.email}</p>
+        )}
+        <button
+          onClick={signOut}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground transition-colors duration-150 w-full"
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          Sign Out
+        </button>
+        <p className="px-3 text-[11px] text-sidebar-muted">v1.0 · Beacon Call Dashboard</p>
       </div>
     </aside>
   );
