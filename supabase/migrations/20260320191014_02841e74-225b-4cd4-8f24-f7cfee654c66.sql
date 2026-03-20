@@ -1,0 +1,1 @@
+ALTER TABLE public.leads ADD COLUMN calls_at_first_quote integer NULL;
