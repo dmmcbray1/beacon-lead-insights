@@ -160,6 +160,10 @@ export interface KPIData {
   avgDaysToQuote: number;
   avgDaysToSoldFromSeen: number;
   avgDaysToSoldFromContact: number;
+  /** Days from first_quote_date → first_sold_date */
+  avgDaysQuoteToSold: number;
+  /** Difference in Total Calls between first sold and first quote snapshots */
+  avgCallsQuoteToSold: number;
 }
 
 export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): KPIData {
