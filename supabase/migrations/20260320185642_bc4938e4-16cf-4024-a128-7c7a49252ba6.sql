@@ -1,0 +1,1 @@
+ALTER TABLE public.leads ADD COLUMN first_sold_date timestamp with time zone NULL;

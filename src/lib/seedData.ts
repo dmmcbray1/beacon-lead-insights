@@ -32,6 +32,8 @@ export function getSeedKPIs(): KPIData {
     callbackToQuoteRate: 0.289,
     avgCallsToQuote: 4.3,
     avgDaysToQuote: 6.8,
+    avgDaysToSoldFromSeen: 12.4,
+    avgDaysToSoldFromContact: 8.7,
   };
 }
 

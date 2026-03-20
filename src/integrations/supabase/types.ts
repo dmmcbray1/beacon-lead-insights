@@ -374,6 +374,7 @@ export type Database = {
           first_deer_dama_date: string | null
           first_quote_date: string | null
           first_seen_date: string | null
+          first_sold_date: string | null
           has_bad_phone: boolean | null
           id: string
           latest_call_date: string | null
@@ -399,6 +400,7 @@ export type Database = {
           first_deer_dama_date?: string | null
           first_quote_date?: string | null
           first_seen_date?: string | null
+          first_sold_date?: string | null
           has_bad_phone?: boolean | null
           id?: string
           latest_call_date?: string | null
@@ -424,6 +426,7 @@ export type Database = {
           first_deer_dama_date?: string | null
           first_quote_date?: string | null
           first_seen_date?: string | null
+          first_sold_date?: string | null
           has_bad_phone?: boolean | null
           id?: string
           latest_call_date?: string | null
