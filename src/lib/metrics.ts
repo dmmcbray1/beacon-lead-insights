@@ -230,10 +230,31 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
       }, 0) / soldWithContactDates.length
     : 0;
 
+  // Average days from quote to sold (first_quote_date → first_sold_date)
+  const soldWithQuoteDates = soldLeads.filter(l => l.first_quote_date && l.first_sold_date);
+  const avgDaysQuoteToSold = soldWithQuoteDates.length > 0
+    ? soldWithQuoteDates.reduce((sum, l) => {
+        const start = new Date(l.first_quote_date!).getTime();
+        const end = new Date(l.first_sold_date!).getTime();
+        return sum + Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+      }, 0) / soldWithQuoteDates.length
+    : 0;
+
+  // Average calls from quote to sold (calls_at_first_sold − calls_at_first_quote)
+  const soldWithCallSnapshots = soldLeads.filter(
+    l => l.calls_at_first_sold != null && l.calls_at_first_quote != null
+  );
+  const avgCallsQuoteToSold = soldWithCallSnapshots.length > 0
+    ? soldWithCallSnapshots.reduce(
+        (sum, l) => sum + Math.max(0, l.calls_at_first_sold! - l.calls_at_first_quote!), 0
+      ) / soldWithCallSnapshots.length
+    : 0;
+
   return {
     totalLeads, newLeads, reQuoteLeads,
     totalContacts, totalQuotedHouseholds, totalCallbacks, badPhoneCount,
     contactRate, quoteRate, contactToQuoteRate, callbackToQuoteRate,
     avgCallsToQuote, avgDaysToQuote, avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
+    avgDaysQuoteToSold, avgCallsQuoteToSold,
   };
 }
