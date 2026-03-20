@@ -47,6 +47,8 @@ export default function Dashboard() {
     { label: 'Avg Days to Quote', value: kpis.avgDaysToQuote.toFixed(1), icon: Clock, color: 'hsl(215,72%,50%)' },
     { label: 'Avg Days to Sold (Seen)', value: kpis.avgDaysToSoldFromSeen.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,40%)' },
     { label: 'Avg Days to Sold (Contact)', value: kpis.avgDaysToSoldFromContact.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,50%)' },
+    { label: 'Quote → Sold Days', value: kpis.avgDaysQuoteToSold.toFixed(1), icon: Clock, color: 'hsl(38,92%,45%)' },
+    { label: 'Quote → Sold Calls', value: kpis.avgCallsQuoteToSold.toFixed(1), icon: BarChart3, color: 'hsl(38,92%,45%)' },
   ];
 
   return (
