@@ -15,9 +15,20 @@ export const QUOTE_DISPOSITIONS = [
   '4.0 SOLD',
 ] as const;
 
+export const SOLD_DISPOSITIONS = [
+  '4.0 SOLD',
+] as const;
+
 export const BAD_PHONE_STATUSES = [
   '1.1 CALLED BAD PHONE #',
 ] as const;
+
+// Vendor name filter rules for lead classification
+export const VENDOR_FILTERS = {
+  newOutbound: 'beacon territory',
+  newInbound: ['beacon territory', 'inbound ivr'],
+  reQuote: 'requote',
+} as const;
 
 // Call type to direction mapping
 export const DEFAULT_CALL_TYPE_MAPPINGS: Record<string, 'outbound' | 'inbound'> = {

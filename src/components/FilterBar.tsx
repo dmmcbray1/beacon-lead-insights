@@ -1,4 +1,4 @@
-import { Calendar, Building2, Users, Tag, FileText } from 'lucide-react';
+import { Calendar, Building2, Users, Tag, FileText, Filter } from 'lucide-react';
 import { SEED_AGENCIES, SEED_STAFF } from '@/lib/seedData';
 
 interface FilterBarProps {
@@ -8,12 +8,13 @@ interface FilterBarProps {
     staff: string;
     leadType: string;
     dateBasis: string;
+    vendorFilter?: boolean;
   };
   onChange: (filters: any) => void;
 }
 
 export default function FilterBar({ filters, onChange }: FilterBarProps) {
-  const update = (key: string, value: string) => onChange({ ...filters, [key]: value });
+  const update = (key: string, value: string | boolean) => onChange({ ...filters, [key]: value });
 
   return (
     <div className="filter-bar">
@@ -88,6 +89,20 @@ export default function FilterBar({ filters, onChange }: FilterBarProps) {
           <option value="re_quote">Re-Quotes</option>
         </select>
       </div>
+
+      {filters.vendorFilter !== undefined && (
+        <button
+          onClick={() => update('vendorFilter', !filters.vendorFilter)}
+          className={`flex items-center gap-1.5 text-sm rounded-md px-2.5 py-1.5 transition-colors cursor-pointer ${
+            filters.vendorFilter
+              ? 'bg-primary/10 text-primary font-medium'
+              : 'bg-secondary text-muted-foreground'
+          }`}
+        >
+          <Filter className="w-4 h-4" />
+          {filters.vendorFilter ? 'Vendor Filter On' : 'Vendor Filter Off'}
+        </button>
+      )}
     </div>
   );
 }

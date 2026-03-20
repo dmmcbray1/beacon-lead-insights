@@ -66,7 +66,7 @@ export default function Dashboard() {
           <KPICard key={c.label} {...c} />
         ))}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-8">
         {cards.slice(7).map(c => (
           <KPICard key={c.label} {...c} />
         ))}
