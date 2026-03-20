@@ -3,7 +3,13 @@
  * All KPI definitions live here for easy maintenance.
  */
 
-import { CONTACT_DISPOSITIONS, QUOTE_DISPOSITIONS, SOLD_DISPOSITIONS, BAD_PHONE_STATUSES } from './constants';
+import {
+  CONTACT_DISPOSITIONS,
+  QUOTE_DISPOSITIONS,
+  SOLD_DISPOSITIONS,
+  BAD_PHONE_STATUSES,
+  VENDOR_FILTER_RULES,
+} from './constants';
 
 export interface LeadRecord {
   id: string;
@@ -20,56 +26,102 @@ export interface LeadRecord {
   total_callbacks: number;
   has_bad_phone: boolean;
   statuses: string[];
+  /** The Call Type value from Daily Call Report (contains campaign/territory info) */
+  call_type: string | null;
+  /** The Vendor Name column value */
   vendor_name: string | null;
-  call_direction: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Status classification helpers
+// ---------------------------------------------------------------------------
+
+function matchesAny(value: string, list: readonly string[]): boolean {
+  const v = value.trim().toLowerCase();
+  return list.some(d => d.toLowerCase() === v);
 }
 
 export function isContact(statuses: string[]): boolean {
-  return statuses.some(s =>
-    CONTACT_DISPOSITIONS.some(d => d.toLowerCase() === s.trim().toLowerCase())
-  );
+  return statuses.some(s => matchesAny(s, CONTACT_DISPOSITIONS));
 }
 
 export function isQuoted(statuses: string[]): boolean {
-  return statuses.some(s =>
-    QUOTE_DISPOSITIONS.some(d => d.toLowerCase() === s.trim().toLowerCase())
-  );
+  return statuses.some(s => matchesAny(s, QUOTE_DISPOSITIONS));
 }
 
 export function isSold(statuses: string[]): boolean {
-  return statuses.some(s =>
-    SOLD_DISPOSITIONS.some(d => d.toLowerCase() === s.trim().toLowerCase())
-  );
+  return statuses.some(s => matchesAny(s, SOLD_DISPOSITIONS));
 }
 
 export function isBadPhone(statuses: string[]): boolean {
-  return statuses.some(s =>
-    BAD_PHONE_STATUSES.some(d => d.toLowerCase() === s.trim().toLowerCase())
-  );
+  return statuses.some(s => matchesAny(s, BAD_PHONE_STATUSES));
+}
+
+// ---------------------------------------------------------------------------
+// Call direction resolution (substring-based for complex Call Type strings)
+// ---------------------------------------------------------------------------
+
+/**
+ * Determines call direction from the Call Type string.
+ * "Inbound Call" and "Inbound IVR" → inbound; everything else → outbound.
+ */
+export function resolveCallDirection(callType: string | null): 'inbound' | 'outbound' {
+  if (!callType) return 'outbound';
+  const ct = callType.trim().toLowerCase();
+  if (ct === 'inbound call' || ct === 'inbound ivr') return 'inbound';
+  return 'outbound';
 }
 
 /**
- * Checks if a lead's vendor name passes the vendor filter rules.
- * - New leads outbound: vendor must contain "beacon territory"
- * - New leads inbound (including IVR): vendor must contain "beacon territory" or "inbound ivr"
- * - Re-quote leads: vendor must contain "requote"
+ * Resolves the lead phone number from a Daily Call row.
+ * Outbound → To field; Inbound → From field.
+ */
+export function resolveLeadPhone(
+  callType: string | null,
+  fromNumber: string | null,
+  toNumber: string | null,
+): string | null {
+  const direction = resolveCallDirection(callType);
+  return direction === 'inbound' ? (fromNumber || null) : (toNumber || null);
+}
+
+// ---------------------------------------------------------------------------
+// Vendor / territory filter
+// ---------------------------------------------------------------------------
+
+/**
+ * Checks whether a lead's call data passes the vendor territory filter.
+ *
+ * Filter rules (based on Call Type field, NOT Vendor Name):
+ *   New outbound  → Call Type contains "beacon territory"
+ *   New inbound   → Call Type is "Inbound Call" or "Inbound IVR"
+ *   Re-quote      → Call Type or Vendor Name contains "requote"
  */
 export function passesVendorFilter(lead: LeadRecord): boolean {
-  const vendor = (lead.vendor_name || '').toLowerCase();
+  const callType = (lead.call_type || '').toLowerCase();
+  const vendorName = (lead.vendor_name || '').toLowerCase();
   const leadType = (lead.lead_type || '').toLowerCase();
 
+  // Re-quote leads: Call Type or Vendor Name must contain "requote"
   if (leadType === 're_quote' || leadType === 're-quote') {
-    return vendor.includes('requote');
+    return (
+      callType.includes(VENDOR_FILTER_RULES.reQuoteSubstring) ||
+      vendorName.includes(VENDOR_FILTER_RULES.reQuoteSubstring)
+    );
   }
 
-  // New lead / other
-  const direction = (lead.call_direction || '').toLowerCase();
-  if (direction === 'inbound') {
-    return vendor.includes('beacon territory') || vendor.includes('inbound ivr');
+  // New leads — check if inbound type
+  if ((VENDOR_FILTER_RULES.inboundCallTypes as readonly string[]).includes(callType)) {
+    return true; // All "Inbound Call" / "Inbound IVR" rows pass
   }
-  // Outbound or unspecified
-  return vendor.includes('beacon territory');
+
+  // New leads — outbound must contain "beacon territory" in Call Type
+  return callType.includes(VENDOR_FILTER_RULES.newOutboundSubstring);
 }
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
 
 export function calcRate(numerator: number, denominator: number): number {
   if (denominator === 0) return 0;
@@ -83,6 +135,10 @@ export function formatPercent(value: number): string {
 export function formatNumber(value: number): string {
   return value.toLocaleString();
 }
+
+// ---------------------------------------------------------------------------
+// KPI calculation
+// ---------------------------------------------------------------------------
 
 export interface KPIData {
   totalLeads: number;
@@ -133,7 +189,7 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
     ? quotedWithCalls.reduce((sum, l) => sum + l.total_call_attempts, 0) / quotedWithCalls.length
     : 0;
 
-  // Average days to quote
+  // Average days to quote (first seen → first quote)
   const quotedWithDates = quotedLeads.filter(l => l.first_seen_date && l.first_quote_date);
   const avgDaysToQuote = quotedWithDates.length > 0
     ? quotedWithDates.reduce((sum, l) => {
@@ -143,7 +199,7 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
       }, 0) / quotedWithDates.length
     : 0;
 
-  // Average days to sold (from first seen)
+  // Average days to sold (first seen → first sold)
   const soldLeads = filtered.filter(l => isSold(l.statuses));
   const soldWithSeenDates = soldLeads.filter(l => l.first_seen_date && l.first_sold_date);
   const avgDaysToSoldFromSeen = soldWithSeenDates.length > 0
@@ -154,7 +210,7 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
       }, 0) / soldWithSeenDates.length
     : 0;
 
-  // Average days to sold (from first contact)
+  // Average days to sold (first contact → first sold)
   const soldWithContactDates = soldLeads.filter(l => l.first_contact_date && l.first_sold_date);
   const avgDaysToSoldFromContact = soldWithContactDates.length > 0
     ? soldWithContactDates.reduce((sum, l) => {
