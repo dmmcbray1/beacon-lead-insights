@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   Users, UserCheck, PhoneCall, FileCheck, PhoneOff,
-  TrendingUp, Target, ArrowRightLeft, BarChart3, Clock, Percent, PhoneIncoming
+  TrendingUp, Target, ArrowRightLeft, BarChart3, Clock, Percent, PhoneIncoming, CheckCircle2, Filter
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import KPICard from '@/components/KPICard';
@@ -28,6 +28,7 @@ export default function Dashboard() {
     staff: 'all',
     leadType: 'all',
     dateBasis: 'lead_created',
+    vendorFilter: true,
   });
 
   const cards = [
@@ -44,6 +45,8 @@ export default function Dashboard() {
     { label: 'Callback → Quote', value: formatPercent(kpis.callbackToQuoteRate), icon: PhoneCall, color: 'hsl(270,55%,50%)' },
     { label: 'Avg Calls to Quote', value: kpis.avgCallsToQuote.toFixed(1), icon: BarChart3, color: 'hsl(38,92%,50%)' },
     { label: 'Avg Days to Quote', value: kpis.avgDaysToQuote.toFixed(1), icon: Clock, color: 'hsl(215,72%,50%)' },
+    { label: 'Avg Days to Sold (Seen)', value: kpis.avgDaysToSoldFromSeen.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,40%)' },
+    { label: 'Avg Days to Sold (Contact)', value: kpis.avgDaysToSoldFromContact.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,50%)' },
   ];
 
   return (
