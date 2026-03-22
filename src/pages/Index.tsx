@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import {
   Users, UserCheck, PhoneCall, FileCheck, PhoneOff,
-  TrendingUp, Target, ArrowRightLeft, BarChart3, Clock, Percent, PhoneIncoming, CheckCircle2, Filter
+  TrendingUp, Target, ArrowRightLeft, BarChart3, Clock, Percent, PhoneIncoming, CheckCircle2,
+  Layers, Activity, ShieldCheck, AlertTriangle
 } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import KPICard from '@/components/KPICard';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import FlipKPICard from '@/components/FlipKPICard';
 import FilterBar from '@/components/FilterBar';
 import { getSeedKPIs, getSeedTrendData } from '@/lib/seedData';
 import { formatPercent, formatNumber } from '@/lib/metrics';
@@ -12,7 +13,6 @@ import { formatPercent, formatNumber } from '@/lib/metrics';
 const kpis = getSeedKPIs();
 const trendData = getSeedTrendData();
 
-// Contact timing seed data
 const contactTiming = [
   { label: 'Day 0–1', count: 287, pct: 44.8 },
   { label: 'Day 2–7', count: 198, pct: 30.9 },
@@ -31,24 +31,69 @@ export default function Dashboard() {
     vendorFilter: true,
   });
 
-  const cards = [
-    { label: 'Total Leads', value: formatNumber(kpis.totalLeads), icon: Users, color: 'hsl(215,72%,40%)' },
-    { label: 'New Leads', value: formatNumber(kpis.newLeads), icon: Users, color: 'hsl(215,72%,50%)' },
-    { label: 'Re-Quote Leads', value: formatNumber(kpis.reQuoteLeads), icon: ArrowRightLeft, color: 'hsl(270,55%,50%)' },
-    { label: 'Total Contacts', value: formatNumber(kpis.totalContacts), icon: UserCheck, color: 'hsl(152,60%,40%)' },
-    { label: 'Quoted Households', value: formatNumber(kpis.totalQuotedHouseholds), icon: FileCheck, color: 'hsl(38,92%,50%)' },
-    { label: 'Total Callbacks', value: formatNumber(kpis.totalCallbacks), icon: PhoneIncoming, color: 'hsl(270,55%,50%)' },
-    { label: 'Bad Phone', value: formatNumber(kpis.badPhoneCount), icon: PhoneOff, color: 'hsl(0,72%,51%)' },
-    { label: 'Contact Rate', value: formatPercent(kpis.contactRate), icon: Percent, color: 'hsl(152,60%,40%)' },
-    { label: 'Quote Rate', value: formatPercent(kpis.quoteRate), icon: Target, color: 'hsl(38,92%,50%)' },
-    { label: 'Contact → Quote', value: formatPercent(kpis.contactToQuoteRate), icon: TrendingUp, color: 'hsl(215,72%,40%)' },
-    { label: 'Callback → Quote', value: formatPercent(kpis.callbackToQuoteRate), icon: PhoneCall, color: 'hsl(270,55%,50%)' },
-    { label: 'Avg Calls to Quote', value: kpis.avgCallsToQuote.toFixed(1), icon: BarChart3, color: 'hsl(38,92%,50%)' },
-    { label: 'Avg Days to Quote', value: kpis.avgDaysToQuote.toFixed(1), icon: Clock, color: 'hsl(215,72%,50%)' },
-    { label: 'Avg Days to Sold (Seen)', value: kpis.avgDaysToSoldFromSeen.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,40%)' },
-    { label: 'Avg Days to Sold (Contact)', value: kpis.avgDaysToSoldFromContact.toFixed(1), icon: CheckCircle2, color: 'hsl(152,60%,50%)' },
-    { label: 'Quote → Sold Days', value: kpis.avgDaysQuoteToSold.toFixed(1), icon: Clock, color: 'hsl(38,92%,45%)' },
-    { label: 'Quote → Sold Calls', value: kpis.avgCallsQuoteToSold.toFixed(1), icon: BarChart3, color: 'hsl(38,92%,45%)' },
+  const groupedCards = [
+    {
+      title: 'Lead Volume',
+      summaryValue: formatNumber(kpis.totalLeads),
+      summaryLabel: 'Total Leads',
+      icon: Layers,
+      color: 'hsl(var(--kpi-leads))',
+      subMetrics: [
+        { label: 'Total Leads', value: formatNumber(kpis.totalLeads), icon: Users, color: 'hsl(var(--kpi-leads))' },
+        { label: 'New Leads', value: formatNumber(kpis.newLeads), icon: Users, color: 'hsl(var(--kpi-leads))' },
+        { label: 'Re-Quote Leads', value: formatNumber(kpis.reQuoteLeads), icon: ArrowRightLeft, color: 'hsl(var(--kpi-callbacks))' },
+      ],
+    },
+    {
+      title: 'Contacts & Callbacks',
+      summaryValue: formatPercent(kpis.contactRate),
+      summaryLabel: 'Contact Rate',
+      icon: Activity,
+      color: 'hsl(var(--kpi-contacts))',
+      subMetrics: [
+        { label: 'Total Contacts', value: formatNumber(kpis.totalContacts), icon: UserCheck, color: 'hsl(var(--kpi-contacts))' },
+        { label: 'Contact Rate', value: formatPercent(kpis.contactRate), icon: Percent, color: 'hsl(var(--kpi-contacts))' },
+        { label: 'Total Callbacks', value: formatNumber(kpis.totalCallbacks), icon: PhoneIncoming, color: 'hsl(var(--kpi-callbacks))' },
+        { label: 'Callback → Quote', value: formatPercent(kpis.callbackToQuoteRate), icon: PhoneCall, color: 'hsl(var(--kpi-callbacks))' },
+      ],
+    },
+    {
+      title: 'Quoting',
+      summaryValue: formatPercent(kpis.quoteRate),
+      summaryLabel: 'Quote Rate',
+      icon: Target,
+      color: 'hsl(var(--kpi-quotes))',
+      subMetrics: [
+        { label: 'Quoted Households', value: formatNumber(kpis.totalQuotedHouseholds), icon: FileCheck, color: 'hsl(var(--kpi-quotes))' },
+        { label: 'Quote Rate', value: formatPercent(kpis.quoteRate), icon: Target, color: 'hsl(var(--kpi-quotes))' },
+        { label: 'Contact → Quote', value: formatPercent(kpis.contactToQuoteRate), icon: TrendingUp, color: 'hsl(var(--kpi-leads))' },
+        { label: 'Avg Calls to Quote', value: kpis.avgCallsToQuote.toFixed(1), icon: BarChart3, color: 'hsl(var(--kpi-quotes))' },
+        { label: 'Avg Days to Quote', value: kpis.avgDaysToQuote.toFixed(1), icon: Clock, color: 'hsl(var(--kpi-leads))' },
+      ],
+    },
+    {
+      title: 'Sold Pipeline',
+      summaryValue: kpis.avgDaysToSoldFromSeen.toFixed(1),
+      summaryLabel: 'Avg Days to Sold (Seen)',
+      icon: ShieldCheck,
+      color: 'hsl(var(--kpi-contacts))',
+      subMetrics: [
+        { label: 'Days to Sold (Seen)', value: kpis.avgDaysToSoldFromSeen.toFixed(1), icon: CheckCircle2, color: 'hsl(var(--kpi-contacts))' },
+        { label: 'Days to Sold (Contact)', value: kpis.avgDaysToSoldFromContact.toFixed(1), icon: CheckCircle2, color: 'hsl(var(--kpi-contacts))' },
+        { label: 'Quote → Sold Days', value: kpis.avgDaysQuoteToSold.toFixed(1), icon: Clock, color: 'hsl(var(--kpi-quotes))' },
+        { label: 'Quote → Sold Calls', value: kpis.avgCallsQuoteToSold.toFixed(1), icon: BarChart3, color: 'hsl(var(--kpi-quotes))' },
+      ],
+    },
+    {
+      title: 'Data Quality',
+      summaryValue: formatNumber(kpis.badPhoneCount),
+      summaryLabel: 'Bad Phone Numbers',
+      icon: AlertTriangle,
+      color: 'hsl(var(--kpi-bad))',
+      subMetrics: [
+        { label: 'Bad Phone Count', value: formatNumber(kpis.badPhoneCount), icon: PhoneOff, color: 'hsl(var(--kpi-bad))' },
+      ],
+    },
   ];
 
   return (
@@ -62,15 +107,10 @@ export default function Dashboard() {
 
       <FilterBar filters={filters} onChange={setFilters} />
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7 gap-4 mb-8">
-        {cards.slice(0, 7).map(c => (
-          <KPICard key={c.label} {...c} />
-        ))}
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-8">
-        {cards.slice(7).map(c => (
-          <KPICard key={c.label} {...c} />
+      {/* Grouped Flip KPI Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+        {groupedCards.map((card) => (
+          <FlipKPICard key={card.title} {...card} />
         ))}
       </div>
 
@@ -83,32 +123,32 @@ export default function Dashboard() {
             <AreaChart data={trendData}>
               <defs>
                 <linearGradient id="gradLeads" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(215,72%,40%)" stopOpacity={0.15}/>
-                  <stop offset="95%" stopColor="hsl(215,72%,40%)" stopOpacity={0}/>
+                  <stop offset="5%" stopColor="hsl(var(--kpi-leads))" stopOpacity={0.15}/>
+                  <stop offset="95%" stopColor="hsl(var(--kpi-leads))" stopOpacity={0}/>
                 </linearGradient>
                 <linearGradient id="gradContacts" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(152,60%,40%)" stopOpacity={0.15}/>
-                  <stop offset="95%" stopColor="hsl(152,60%,40%)" stopOpacity={0}/>
+                  <stop offset="5%" stopColor="hsl(var(--kpi-contacts))" stopOpacity={0.15}/>
+                  <stop offset="95%" stopColor="hsl(var(--kpi-contacts))" stopOpacity={0}/>
                 </linearGradient>
                 <linearGradient id="gradQuotes" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(38,92%,50%)" stopOpacity={0.15}/>
-                  <stop offset="95%" stopColor="hsl(38,92%,50%)" stopOpacity={0}/>
+                  <stop offset="5%" stopColor="hsl(var(--kpi-quotes))" stopOpacity={0.15}/>
+                  <stop offset="95%" stopColor="hsl(var(--kpi-quotes))" stopOpacity={0}/>
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(220,13%,88%)" />
-              <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="hsl(220,10%,46%)" />
-              <YAxis tick={{ fontSize: 12 }} stroke="hsl(220,10%,46%)" />
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+              <XAxis dataKey="date" tick={{ fontSize: 12 }} className="stroke-muted-foreground" />
+              <YAxis tick={{ fontSize: 12 }} className="stroke-muted-foreground" />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: 'hsl(0,0%,100%)',
-                  border: '1px solid hsl(220,13%,88%)',
+                  backgroundColor: 'hsl(var(--card))',
+                  border: '1px solid hsl(var(--border))',
                   borderRadius: '8px',
                   fontSize: '13px',
                 }}
               />
-              <Area type="monotone" dataKey="leads" stroke="hsl(215,72%,40%)" fill="url(#gradLeads)" strokeWidth={2} />
-              <Area type="monotone" dataKey="contacts" stroke="hsl(152,60%,40%)" fill="url(#gradContacts)" strokeWidth={2} />
-              <Area type="monotone" dataKey="quotes" stroke="hsl(38,92%,50%)" fill="url(#gradQuotes)" strokeWidth={2} />
+              <Area type="monotone" dataKey="leads" stroke="hsl(var(--kpi-leads))" fill="url(#gradLeads)" strokeWidth={2} />
+              <Area type="monotone" dataKey="contacts" stroke="hsl(var(--kpi-contacts))" fill="url(#gradContacts)" strokeWidth={2} />
+              <Area type="monotone" dataKey="quotes" stroke="hsl(var(--kpi-quotes))" fill="url(#gradQuotes)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -129,7 +169,7 @@ export default function Dashboard() {
                     className="h-full rounded-full transition-all duration-500"
                     style={{
                       width: `${row.pct}%`,
-                      backgroundColor: row.label === 'Never' ? 'hsl(0,72%,51%)' : 'hsl(215,72%,40%)',
+                      backgroundColor: row.label === 'Never' ? 'hsl(var(--kpi-bad))' : 'hsl(var(--kpi-leads))',
                       opacity: row.label === 'Never' ? 0.7 : 1,
                     }}
                   />
@@ -159,7 +199,7 @@ export default function Dashboard() {
                 </div>
                 <div className="w-px h-8 bg-border" />
                 <div>
-                  <p className="text-lg font-bold tabular-nums" style={{ color: 'hsl(270,55%,50%)' }}>{row.reqVal}</p>
+                  <p className="text-lg font-bold tabular-nums" style={{ color: 'hsl(var(--kpi-callbacks))' }}>{row.reqVal}</p>
                   <p className="text-[11px] text-muted-foreground">Re-Quote</p>
                 </div>
               </div>
