@@ -1,16 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Lock, Phone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/hooks/useAuth';
 
 export default function ResetPassword() {
   const navigate = useNavigate();
-  const { user, loading } = useAuth();
 
   const [checkingLink, setCheckingLink] = useState(true);
-  const [isRecoveryLink, setIsRecoveryLink] = useState(false);
+  const [linkError, setLinkError] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -20,27 +18,49 @@ export default function ResetPassword() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const verifyRecoveryState = async () => {
+    const initializeRecovery = async () => {
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-      const type = hashParams.get('type');
+      const queryParams = new URLSearchParams(window.location.search);
 
-      if (type === 'recovery') {
-        setIsRecoveryLink(true);
+      const code = queryParams.get('code');
+      const type = queryParams.get('type') ?? hashParams.get('type');
+      const errorCode = queryParams.get('error_code') ?? hashParams.get('error_code');
+      const errorDescription = queryParams.get('error_description') ?? hashParams.get('error_description');
+      const hasAccessTokens = Boolean(hashParams.get('access_token') && hashParams.get('refresh_token'));
+
+      if (errorCode || errorDescription) {
+        setLinkError('This reset link is invalid or expired. Please request a new password reset email.');
         setCheckingLink(false);
         return;
       }
 
-      const { data } = await supabase.auth.getSession();
-      setIsRecoveryLink(Boolean(data.session?.user));
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          setLinkError('This reset link is invalid or expired. Please request a new password reset email.');
+        }
+        setCheckingLink(false);
+        return;
+      }
+
+      if (type === 'recovery' || hasAccessTokens) {
+        setCheckingLink(false);
+        return;
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.user) {
+        setLinkError('This reset link is invalid or expired. Please request a new password reset email.');
+      }
+
       setCheckingLink(false);
     };
 
-    verifyRecoveryState();
+    initializeRecovery();
   }, []);
-
-  if (!loading && user && !checkingLink && !isRecoveryLink) {
-    return <Navigate to="/" replace />;
-  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,7 +87,12 @@ export default function ResetPassword() {
         navigate('/login', { replace: true });
       }, 1500);
     } catch (err: any) {
-      setError(err.message || 'Failed to update password.');
+      const message = err?.message || 'Failed to update password.';
+      if (message.toLowerCase().includes('auth session missing')) {
+        setError('This reset link is invalid or expired. Please request a new reset email from login.');
+      } else {
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -90,17 +115,15 @@ export default function ResetPassword() {
 
         <div className="bg-card border rounded-xl p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-foreground mb-1 text-center">Reset password</h2>
-          <p className="text-sm text-muted-foreground text-center mb-6">
-            Create a new password to continue.
-          </p>
+          <p className="text-sm text-muted-foreground text-center mb-6">Create a new password to continue.</p>
 
           {checkingLink ? (
             <div className="text-sm text-muted-foreground text-center">Checking reset link...</div>
-          ) : !isRecoveryLink ? (
+          ) : linkError ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                This reset link is invalid or expired.
+                {linkError}
               </div>
               <Button className="w-full" onClick={() => navigate('/login')}>
                 Back to login
