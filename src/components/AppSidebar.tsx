@@ -1,22 +1,25 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, Users, Building2, Search,
-  Settings, Phone, LogOut
+  Settings, Phone, LogOut, ShieldCheck
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Upload Center', href: '/upload', icon: Upload },
-  { name: 'Lead Explorer', href: '/leads', icon: Search },
-  { name: 'Staff Performance', href: '/staff', icon: Users },
-  { name: 'Agency Performance', href: '/agency', icon: Building2 },
-  { name: 'Admin', href: '/admin', icon: Settings },
-];
-
 export default function AppSidebar() {
   const location = useLocation();
-  const { user, signOut } = useAuth();
+  const { user, isAdmin, signOut } = useAuth();
+
+  const navigation = [
+    { name: 'Dashboard', href: '/', icon: LayoutDashboard, adminOnly: false },
+    { name: 'Upload Center', href: '/upload', icon: Upload, adminOnly: false },
+    { name: 'Lead Explorer', href: '/leads', icon: Search, adminOnly: false },
+    { name: 'Staff Performance', href: '/staff', icon: Users, adminOnly: false },
+    { name: 'Agency Performance', href: '/agency', icon: Building2, adminOnly: true },
+    { name: 'User Management', href: '/admin/users', icon: ShieldCheck, adminOnly: true },
+    { name: 'Admin', href: '/admin', icon: Settings, adminOnly: true },
+  ];
+
+  const visibleNav = navigation.filter(item => !item.adminOnly || isAdmin);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 w-60 bg-sidebar flex flex-col">
@@ -33,7 +36,7 @@ export default function AppSidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {navigation.map((item) => {
+        {visibleNav.map((item) => {
           const isActive = item.href === '/'
             ? location.pathname === '/'
             : location.pathname.startsWith(item.href);
@@ -57,7 +60,14 @@ export default function AppSidebar() {
       {/* User + Sign Out */}
       <div className="px-3 py-4 border-t border-sidebar-border space-y-2">
         {user && (
-          <p className="px-3 text-xs text-sidebar-muted truncate">{user.email}</p>
+          <div className="px-3">
+            <p className="text-xs text-sidebar-muted truncate">{user.email}</p>
+            {isAdmin && (
+              <span className="inline-block mt-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-primary bg-sidebar-primary/10 px-1.5 py-0.5 rounded">
+                Admin
+              </span>
+            )}
+          </div>
         )}
         <button
           onClick={signOut}
