@@ -61,14 +61,18 @@ export function isBadPhone(statuses: string[]): boolean {
   return statuses.some(s => matchesAny(s, BAD_PHONE_STATUSES));
 }
 
+/**
+ * A lead is considered "contacted" if it has a contact disposition OR has callbacks.
+ * Callbacks always count as a contact.
+ */
+export function isContacted(lead: LeadRecord): boolean {
+  return isContact(lead.statuses) || lead.total_callbacks > 0;
+}
+
 // ---------------------------------------------------------------------------
-// Call direction resolution (substring-based for complex Call Type strings)
+// Call direction resolution
 // ---------------------------------------------------------------------------
 
-/**
- * Determines call direction from the Call Type string.
- * "Inbound Call" and "Inbound IVR" → inbound; everything else → outbound.
- */
 export function resolveCallDirection(callType: string | null): 'inbound' | 'outbound' {
   if (!callType) return 'outbound';
   const ct = callType.trim().toLowerCase();
@@ -76,10 +80,6 @@ export function resolveCallDirection(callType: string | null): 'inbound' | 'outb
   return 'outbound';
 }
 
-/**
- * Resolves the lead phone number from a Daily Call row.
- * Outbound → To field; Inbound → From field.
- */
 export function resolveLeadPhone(
   callType: string | null,
   fromNumber: string | null,
@@ -93,20 +93,11 @@ export function resolveLeadPhone(
 // Vendor / territory filter
 // ---------------------------------------------------------------------------
 
-/**
- * Checks whether a lead's call data passes the vendor territory filter.
- *
- * Filter rules (based on Call Type field, NOT Vendor Name):
- *   New outbound  → Call Type contains "beacon territory"
- *   New inbound   → Call Type is "Inbound Call" or "Inbound IVR"
- *   Re-quote      → Call Type or Vendor Name contains "requote"
- */
 export function passesVendorFilter(lead: LeadRecord): boolean {
   const callType = (lead.call_type || '').toLowerCase();
   const vendorName = (lead.vendor_name || '').toLowerCase();
   const leadType = (lead.lead_type || '').toLowerCase();
 
-  // Re-quote leads: Call Type or Vendor Name must contain "requote"
   if (leadType === 're_quote' || leadType === 're-quote') {
     return (
       callType.includes(VENDOR_FILTER_RULES.reQuoteSubstring) ||
@@ -114,12 +105,10 @@ export function passesVendorFilter(lead: LeadRecord): boolean {
     );
   }
 
-  // New leads — check if inbound type
   if ((VENDOR_FILTER_RULES.inboundCallTypes as readonly string[]).includes(callType)) {
-    return true; // All "Inbound Call" / "Inbound IVR" rows pass
+    return true;
   }
 
-  // New leads — outbound must contain "beacon territory" in Call Type
   return callType.includes(VENDOR_FILTER_RULES.newOutboundSubstring);
 }
 
@@ -144,6 +133,26 @@ export function formatNumber(value: number): string {
 // KPI calculation
 // ---------------------------------------------------------------------------
 
+/** Per-lead-type breakdown of key metrics */
+export interface LeadTypeBreakdown {
+  leads: number;
+  contacts: number;
+  contactRate: number;
+  quoted: number;
+  quoteRate: number;
+  contactToQuoteRate: number;
+  callbacks: number;
+  callbackToQuoteRate: number;
+  avgCallsToQuote: number;
+  avgDaysToQuote: number;
+  avgDaysToSoldFromSeen: number;
+  avgDaysToSoldFromContact: number;
+  avgDaysQuoteToSold: number;
+  avgCallsQuoteToSold: number;
+  badPhoneCount: number;
+  badPhoneRate: number;
+}
+
 export interface KPIData {
   totalLeads: number;
   newLeads: number;
@@ -160,24 +169,93 @@ export interface KPIData {
   avgDaysToQuote: number;
   avgDaysToSoldFromSeen: number;
   avgDaysToSoldFromContact: number;
-  /** Days from first_quote_date → first_sold_date */
   avgDaysQuoteToSold: number;
-  /** Difference in Total Calls between first sold and first quote snapshots */
   avgCallsQuoteToSold: number;
   badPhoneRate: number;
   badPhoneNewCount: number;
   badPhoneNewRate: number;
   badPhoneReQuoteCount: number;
   badPhoneReQuoteRate: number;
+  /** Breakdown for new leads */
+  newBreakdown: LeadTypeBreakdown;
+  /** Breakdown for re-quote leads */
+  reQuoteBreakdown: LeadTypeBreakdown;
+}
+
+// Helper: calculate breakdown metrics for a subset of leads
+function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
+  const total = leads.length;
+  const contactedLeads = leads.filter(l => isContacted(l));
+  const contacts = contactedLeads.length;
+  const quotedLeads = leads.filter(l => isQuoted(l.statuses));
+  const quoted = quotedLeads.length;
+  const callbackLeads = leads.filter(l => l.total_callbacks > 0);
+  const callbacks = callbackLeads.length;
+  const badPhone = leads.filter(l => l.has_bad_phone).length;
+
+  const contactRate = calcRate(contacts, total);
+  const quoteRate = calcRate(quoted, total);
+  const contactedAndQuoted = contactedLeads.filter(l => isQuoted(l.statuses)).length;
+  const contactToQuoteRate = calcRate(contactedAndQuoted, contacts);
+  const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
+  const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
+
+  const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
+  const avgCallsToQuote = quotedWithCalls.length > 0
+    ? quotedWithCalls.reduce((sum, l) => sum + (l.calls_at_first_quote ?? l.total_call_attempts), 0) / quotedWithCalls.length
+    : 0;
+
+  const quotedWithDates = quotedLeads.filter(l => l.first_seen_date && l.first_quote_date);
+  const avgDaysToQuote = quotedWithDates.length > 0
+    ? quotedWithDates.reduce((sum, l) => {
+        const s = new Date(l.first_seen_date!).getTime();
+        const e = new Date(l.first_quote_date!).getTime();
+        return sum + Math.max(0, (e - s) / 86400000);
+      }, 0) / quotedWithDates.length
+    : 0;
+
+  const soldLeads = leads.filter(l => isSold(l.statuses));
+  const soldSeen = soldLeads.filter(l => l.first_seen_date && l.first_sold_date);
+  const avgDaysToSoldFromSeen = soldSeen.length > 0
+    ? soldSeen.reduce((sum, l) => sum + Math.max(0, (new Date(l.first_sold_date!).getTime() - new Date(l.first_seen_date!).getTime()) / 86400000), 0) / soldSeen.length
+    : 0;
+
+  const soldContact = soldLeads.filter(l => l.first_contact_date && l.first_sold_date);
+  const avgDaysToSoldFromContact = soldContact.length > 0
+    ? soldContact.reduce((sum, l) => sum + Math.max(0, (new Date(l.first_sold_date!).getTime() - new Date(l.first_contact_date!).getTime()) / 86400000), 0) / soldContact.length
+    : 0;
+
+  const soldQuote = soldLeads.filter(l => l.first_quote_date && l.first_sold_date);
+  const avgDaysQuoteToSold = soldQuote.length > 0
+    ? soldQuote.reduce((sum, l) => sum + Math.max(0, (new Date(l.first_sold_date!).getTime() - new Date(l.first_quote_date!).getTime()) / 86400000), 0) / soldQuote.length
+    : 0;
+
+  const soldCalls = soldLeads.filter(l => l.calls_at_first_sold != null && l.calls_at_first_quote != null);
+  const avgCallsQuoteToSold = soldCalls.length > 0
+    ? soldCalls.reduce((sum, l) => sum + Math.max(0, l.calls_at_first_sold! - l.calls_at_first_quote!), 0) / soldCalls.length
+    : 0;
+
+  return {
+    leads: total, contacts, contactRate, quoted, quoteRate,
+    contactToQuoteRate, callbacks, callbackToQuoteRate,
+    avgCallsToQuote, avgDaysToQuote,
+    avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
+    avgDaysQuoteToSold, avgCallsQuoteToSold,
+    badPhoneCount: badPhone,
+    badPhoneRate: calcRate(badPhone, total),
+  };
 }
 
 export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): KPIData {
   const filtered = applyVendorFilter ? leads.filter(passesVendorFilter) : leads;
   const totalLeads = filtered.length;
-  const newLeads = filtered.filter(l => l.lead_type === 'new_lead').length;
-  const reQuoteLeads = filtered.filter(l => l.lead_type === 're_quote').length;
+  const newLeadsList = filtered.filter(l => l.lead_type === 'new_lead');
+  const reQuoteLeadsList = filtered.filter(l => l.lead_type === 're_quote');
+  const newLeads = newLeadsList.length;
+  const reQuoteLeads = reQuoteLeadsList.length;
 
-  const contactedLeads = filtered.filter(l => isContact(l.statuses));
+  // Callbacks count as contacts
+  const contactedLeads = filtered.filter(l => isContacted(l));
   const totalContacts = contactedLeads.length;
 
   const quotedLeads = filtered.filter(l => isQuoted(l.statuses));
@@ -196,56 +274,48 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
   const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
   const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
 
-  // Average calls to quote — uses calls_at_first_quote (Deer Dama Total Calls
-  // captured at the moment the lead first reached a quote status).
-  // Falls back to total_call_attempts if calls_at_first_quote is not available.
   const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
   const avgCallsToQuote = quotedWithCalls.length > 0
     ? quotedWithCalls.reduce((sum, l) => sum + (l.calls_at_first_quote ?? l.total_call_attempts), 0) / quotedWithCalls.length
     : 0;
 
-  // Average days to quote (first seen → first quote)
   const quotedWithDates = quotedLeads.filter(l => l.first_seen_date && l.first_quote_date);
   const avgDaysToQuote = quotedWithDates.length > 0
     ? quotedWithDates.reduce((sum, l) => {
         const start = new Date(l.first_seen_date!).getTime();
         const end = new Date(l.first_quote_date!).getTime();
-        return sum + Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+        return sum + Math.max(0, (end - start) / 86400000);
       }, 0) / quotedWithDates.length
     : 0;
 
-  // Average days to sold (first seen → first sold)
   const soldLeads = filtered.filter(l => isSold(l.statuses));
   const soldWithSeenDates = soldLeads.filter(l => l.first_seen_date && l.first_sold_date);
   const avgDaysToSoldFromSeen = soldWithSeenDates.length > 0
     ? soldWithSeenDates.reduce((sum, l) => {
         const start = new Date(l.first_seen_date!).getTime();
         const end = new Date(l.first_sold_date!).getTime();
-        return sum + Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+        return sum + Math.max(0, (end - start) / 86400000);
       }, 0) / soldWithSeenDates.length
     : 0;
 
-  // Average days to sold (first contact → first sold)
   const soldWithContactDates = soldLeads.filter(l => l.first_contact_date && l.first_sold_date);
   const avgDaysToSoldFromContact = soldWithContactDates.length > 0
     ? soldWithContactDates.reduce((sum, l) => {
         const start = new Date(l.first_contact_date!).getTime();
         const end = new Date(l.first_sold_date!).getTime();
-        return sum + Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+        return sum + Math.max(0, (end - start) / 86400000);
       }, 0) / soldWithContactDates.length
     : 0;
 
-  // Average days from quote to sold (first_quote_date → first_sold_date)
   const soldWithQuoteDates = soldLeads.filter(l => l.first_quote_date && l.first_sold_date);
   const avgDaysQuoteToSold = soldWithQuoteDates.length > 0
     ? soldWithQuoteDates.reduce((sum, l) => {
         const start = new Date(l.first_quote_date!).getTime();
         const end = new Date(l.first_sold_date!).getTime();
-        return sum + Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+        return sum + Math.max(0, (end - start) / 86400000);
       }, 0) / soldWithQuoteDates.length
     : 0;
 
-  // Average calls from quote to sold (calls_at_first_sold − calls_at_first_quote)
   const soldWithCallSnapshots = soldLeads.filter(
     l => l.calls_at_first_sold != null && l.calls_at_first_quote != null
   );
@@ -256,13 +326,15 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
     : 0;
 
   // Bad phone breakdowns
-  const newLeadsList = filtered.filter(l => l.lead_type === 'new_lead');
-  const reQuoteLeadsList = filtered.filter(l => l.lead_type === 're_quote');
   const badPhoneNewCount = newLeadsList.filter(l => l.has_bad_phone).length;
   const badPhoneReQuoteCount = reQuoteLeadsList.filter(l => l.has_bad_phone).length;
   const badPhoneRate = calcRate(badPhoneCount, totalLeads);
   const badPhoneNewRate = calcRate(badPhoneNewCount, newLeadsList.length);
   const badPhoneReQuoteRate = calcRate(badPhoneReQuoteCount, reQuoteLeadsList.length);
+
+  // Per-type breakdowns
+  const newBreakdown = calcBreakdown(newLeadsList);
+  const reQuoteBreakdown = calcBreakdown(reQuoteLeadsList);
 
   return {
     totalLeads, newLeads, reQuoteLeads,
@@ -271,5 +343,6 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
     avgCallsToQuote, avgDaysToQuote, avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
     avgDaysQuoteToSold, avgCallsQuoteToSold,
     badPhoneRate, badPhoneNewCount, badPhoneNewRate, badPhoneReQuoteCount, badPhoneReQuoteRate,
+    newBreakdown, reQuoteBreakdown,
   };
 }

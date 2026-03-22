@@ -1,8 +1,7 @@
 /**
  * Seed data for demo purposes.
- * Provides realistic-looking data so the dashboard looks populated.
  */
-import type { KPIData } from './metrics';
+import type { KPIData, LeadTypeBreakdown } from './metrics';
 
 export const SEED_AGENCIES = [
   { id: 'agency-1', name: 'McBrayer Agency' },
@@ -16,6 +15,44 @@ export const SEED_STAFF = [
   { id: 'staff-4', name: 'James Okafor', agency_id: 'agency-2' },
   { id: 'staff-5', name: 'Linda Pham', agency_id: 'agency-2' },
 ];
+
+const newBreakdown: LeadTypeBreakdown = {
+  leads: 893,
+  contacts: 439,
+  contactRate: 0.492,
+  quoted: 137,
+  quoteRate: 0.154,
+  contactToQuoteRate: 0.312,
+  callbacks: 98,
+  callbackToQuoteRate: 0.255,
+  avgCallsToQuote: 4.8,
+  avgDaysToQuote: 7.4,
+  avgDaysToSoldFromSeen: 14.1,
+  avgDaysToSoldFromContact: 10.2,
+  avgDaysQuoteToSold: 5.8,
+  avgCallsQuoteToSold: 3.1,
+  badPhoneCount: 54,
+  badPhoneRate: 0.0605,
+};
+
+const reQuoteBreakdown: LeadTypeBreakdown = {
+  leads: 354,
+  contacts: 202,
+  contactRate: 0.571,
+  quoted: 81,
+  quoteRate: 0.229,
+  contactToQuoteRate: 0.401,
+  callbacks: 89,
+  callbackToQuoteRate: 0.326,
+  avgCallsToQuote: 3.4,
+  avgDaysToQuote: 5.1,
+  avgDaysToSoldFromSeen: 9.2,
+  avgDaysToSoldFromContact: 6.1,
+  avgDaysQuoteToSold: 4.3,
+  avgCallsQuoteToSold: 2.3,
+  badPhoneCount: 19,
+  badPhoneRate: 0.0537,
+};
 
 export function getSeedKPIs(): KPIData {
   return {
@@ -41,6 +78,8 @@ export function getSeedKPIs(): KPIData {
     badPhoneNewRate: 0.0605,
     badPhoneReQuoteCount: 19,
     badPhoneReQuoteRate: 0.0537,
+    newBreakdown,
+    reQuoteBreakdown,
   };
 }
 
@@ -99,7 +138,6 @@ export function getSeedStaffPerformance(): StaffPerformance[] {
   ];
 }
 
-// Seed trend data for charts
 export function getSeedTrendData() {
   return [
     { date: 'Mar 1', leads: 48, contacts: 24, quotes: 8, callbacks: 7 },
