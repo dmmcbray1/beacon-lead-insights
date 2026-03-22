@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/useAuth";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import AdminRoute from "@/components/AdminRoute";
 import AppLayout from "./components/AppLayout";
 import Index from "./pages/Index";
 import UploadCenter from "./pages/UploadCenter";
@@ -12,6 +13,7 @@ import LeadExplorer from "./pages/LeadExplorer";
 import StaffPerformance from "./pages/StaffPerformance";
 import AgencyPerformance from "./pages/AgencyPerformance";
 import Admin from "./pages/Admin";
+import UserManagement from "./pages/UserManagement";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
@@ -31,8 +33,9 @@ const App = () => (
               <Route path="/upload" element={<UploadCenter />} />
               <Route path="/leads" element={<LeadExplorer />} />
               <Route path="/staff" element={<StaffPerformance />} />
-              <Route path="/agency" element={<AgencyPerformance />} />
-              <Route path="/admin" element={<Admin />} />
+              <Route path="/agency" element={<AdminRoute><AgencyPerformance /></AdminRoute>} />
+              <Route path="/admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
+              <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -36,7 +36,7 @@ export default function Login() {
           options: { emailRedirectTo: window.location.origin },
         });
         if (error) throw error;
-        setSuccess('Check your email for a confirmation link.');
+        setSuccess('Account created! Check your email for a confirmation link. Your account will need admin approval before you can access the dashboard.');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
