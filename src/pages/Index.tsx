@@ -92,6 +92,9 @@ export default function Dashboard() {
       color: 'hsl(var(--kpi-bad))',
       subMetrics: [
         { label: 'Bad Phone Count', value: formatNumber(kpis.badPhoneCount), icon: PhoneOff, color: 'hsl(var(--kpi-bad))' },
+        { label: '% of Total Leads', value: formatPercent(kpis.badPhoneRate), icon: Percent, color: 'hsl(var(--kpi-bad))' },
+        { label: 'New Lead Bad Phone', value: `${formatNumber(kpis.badPhoneNewCount)} (${formatPercent(kpis.badPhoneNewRate)})`, icon: Users, color: 'hsl(var(--kpi-leads))' },
+        { label: 'Re-Quote Bad Phone', value: `${formatNumber(kpis.badPhoneReQuoteCount)} (${formatPercent(kpis.badPhoneReQuoteRate)})`, icon: ArrowRightLeft, color: 'hsl(var(--kpi-callbacks))' },
       ],
     },
   ];
