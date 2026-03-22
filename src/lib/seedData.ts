@@ -36,6 +36,11 @@ export function getSeedKPIs(): KPIData {
     avgDaysToSoldFromContact: 8.7,
     avgDaysQuoteToSold: 5.2,
     avgCallsQuoteToSold: 2.8,
+    badPhoneRate: 0.0585,
+    badPhoneNewCount: 54,
+    badPhoneNewRate: 0.0605,
+    badPhoneReQuoteCount: 19,
+    badPhoneReQuoteRate: 0.0537,
   };
 }
 

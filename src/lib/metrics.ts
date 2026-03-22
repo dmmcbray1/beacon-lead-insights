@@ -255,11 +255,21 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
       ) / soldWithCallSnapshots.length
     : 0;
 
+  // Bad phone breakdowns
+  const newLeadsList = filtered.filter(l => l.lead_type === 'new_lead');
+  const reQuoteLeadsList = filtered.filter(l => l.lead_type === 're_quote');
+  const badPhoneNewCount = newLeadsList.filter(l => l.has_bad_phone).length;
+  const badPhoneReQuoteCount = reQuoteLeadsList.filter(l => l.has_bad_phone).length;
+  const badPhoneRate = calcRate(badPhoneCount, totalLeads);
+  const badPhoneNewRate = calcRate(badPhoneNewCount, newLeadsList.length);
+  const badPhoneReQuoteRate = calcRate(badPhoneReQuoteCount, reQuoteLeadsList.length);
+
   return {
     totalLeads, newLeads, reQuoteLeads,
     totalContacts, totalQuotedHouseholds, totalCallbacks, badPhoneCount,
     contactRate, quoteRate, contactToQuoteRate, callbackToQuoteRate,
     avgCallsToQuote, avgDaysToQuote, avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
     avgDaysQuoteToSold, avgCallsQuoteToSold,
+    badPhoneRate, badPhoneNewCount, badPhoneNewRate, badPhoneReQuoteCount, badPhoneReQuoteRate,
   };
 }
