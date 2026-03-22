@@ -51,22 +51,6 @@ export default function FlipKPICard({
           <p className="stat-label mt-1">{summaryLabel}</p>
         </div>
         <p className="text-xs text-muted-foreground mt-2 font-medium">{title}</p>
-
-        {/* Quick comparison footer */}
-        {breakdownRows.length > 0 && (
-          <div className="mt-3 pt-2.5 border-t border-border/50 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-              <span className="text-[11px] text-muted-foreground truncate">New</span>
-              <span className="text-[11px] font-bold tabular-nums text-primary">{breakdownRows[0].newValue}</span>
-            </div>
-            <div className="flex items-center gap-1.5 min-w-0">
-              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: 'hsl(var(--kpi-callbacks))' }} />
-              <span className="text-[11px] text-muted-foreground truncate">Re-Qt</span>
-              <span className="text-[11px] font-bold tabular-nums" style={{ color: 'hsl(var(--kpi-callbacks))' }}>{breakdownRows[0].reQuoteValue}</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Drill-down modal */}
