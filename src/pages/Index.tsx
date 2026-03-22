@@ -179,7 +179,43 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Removed the old New vs Re-Quote comparison section — now integrated into flip cards */}
+      {/* New vs Re-Quote Comparison Footer */}
+      <div className="bg-card rounded-lg border p-5">
+        <h3 className="section-title mb-4">New Leads vs Re-Quotes</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider py-2 pr-4">Metric</th>
+                <th className="text-right text-xs font-semibold uppercase tracking-wider py-2 px-4 text-primary">New Leads</th>
+                <th className="text-right text-xs font-semibold uppercase tracking-wider py-2 pl-4" style={{ color: 'hsl(var(--kpi-callbacks))' }}>Re-Quotes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: 'Total Leads', nv: formatNumber(nb.leads), rv: formatNumber(rb.leads) },
+                { label: 'Contacts', nv: formatNumber(nb.contacts), rv: formatNumber(rb.contacts) },
+                { label: 'Contact Rate', nv: formatPercent(nb.contactRate), rv: formatPercent(rb.contactRate) },
+                { label: 'Callbacks', nv: formatNumber(nb.callbacks), rv: formatNumber(rb.callbacks) },
+                { label: 'CB → Quote Rate', nv: formatPercent(nb.callbackToQuoteRate), rv: formatPercent(rb.callbackToQuoteRate) },
+                { label: 'Quoted', nv: formatNumber(nb.quoted), rv: formatNumber(rb.quoted) },
+                { label: 'Quote Rate', nv: formatPercent(nb.quoteRate), rv: formatPercent(rb.quoteRate) },
+                { label: 'Contact → Quote', nv: formatPercent(nb.contactToQuoteRate), rv: formatPercent(rb.contactToQuoteRate) },
+                { label: 'Avg Calls to Quote', nv: nb.avgCallsToQuote.toFixed(1), rv: rb.avgCallsToQuote.toFixed(1) },
+                { label: 'Avg Days to Quote', nv: nb.avgDaysToQuote.toFixed(1), rv: rb.avgDaysToQuote.toFixed(1) },
+                { label: 'Bad Phone Count', nv: formatNumber(nb.badPhoneCount), rv: formatNumber(rb.badPhoneCount) },
+                { label: 'Bad Phone %', nv: formatPercent(nb.badPhoneRate), rv: formatPercent(rb.badPhoneRate) },
+              ].map((row, i) => (
+                <tr key={row.label} className={i % 2 === 1 ? 'bg-secondary/20' : ''}>
+                  <td className="py-2.5 pr-4 text-foreground">{row.label}</td>
+                  <td className="py-2.5 px-4 text-right font-bold tabular-nums text-primary">{row.nv}</td>
+                  <td className="py-2.5 pl-4 text-right font-bold tabular-nums" style={{ color: 'hsl(var(--kpi-callbacks))' }}>{row.rv}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
