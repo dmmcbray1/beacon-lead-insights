@@ -86,8 +86,8 @@ export default function Dashboard() {
     },
     {
       title: 'Data Quality',
-      summaryValue: formatNumber(kpis.badPhoneCount),
-      summaryLabel: 'Bad Phone Numbers',
+      summaryValue: formatPercent(kpis.badPhoneRate),
+      summaryLabel: 'Bad Phone Rate',
       icon: AlertTriangle,
       color: 'hsl(var(--kpi-bad))',
       breakdownRows: [
