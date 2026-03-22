@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Phone, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import { Navigate } from 'react-router-dom';
 
 export default function Login() {
   const { user, loading } = useAuth();
@@ -17,10 +16,32 @@ export default function Login() {
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Redirect if already logged in
   if (!loading && user) {
     return <Navigate to="/" replace />;
   }
+
+  const handleResetPassword = async () => {
+    setError('');
+    setSuccess('');
+
+    if (!email.trim()) {
+      setError('Enter your email first, then click Forgot password again.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      setSuccess('Password reset email sent. Check your inbox for the reset link.');
+    } catch (err: any) {
+      setError(err.message || 'Unable to send password reset email.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,8 +56,17 @@ export default function Login() {
           password,
           options: { emailRedirectTo: window.location.origin },
         });
-        if (error) throw error;
-        setSuccess('Account created! Check your email for a confirmation link. Your account will need admin approval before you can access the dashboard.');
+
+        if (error) {
+          if (error.message?.toLowerCase().includes('user already registered')) {
+            setIsSignUp(false);
+            setSuccess('This email is already registered. Sign in or use Forgot password to reset it.');
+            return;
+          }
+          throw error;
+        }
+
+        setSuccess('Account created! After approval, you can sign in and access your dashboard.');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
@@ -46,7 +76,12 @@ export default function Login() {
         navigate('/', { replace: true });
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred');
+      const rawMessage = err.message || 'An error occurred';
+      if (rawMessage.toLowerCase().includes('invalid login credentials')) {
+        setError('Incorrect email or password. If this account already exists, use Forgot password.');
+      } else {
+        setError(rawMessage);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -55,7 +90,6 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm animate-fade-in">
-        {/* Brand */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
           <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
             <Phone className="w-5 h-5 text-primary-foreground" />
@@ -68,7 +102,6 @@ export default function Login() {
           </div>
         </div>
 
-        {/* Card */}
         <div className="bg-card border rounded-xl p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-foreground mb-1 text-center">
             {isSignUp ? 'Create an account' : 'Welcome back'}
@@ -116,6 +149,19 @@ export default function Login() {
               </div>
             </div>
 
+            {!isSignUp && (
+              <div className="flex justify-end -mt-1">
+                <button
+                  type="button"
+                  onClick={handleResetPassword}
+                  className="text-xs text-muted-foreground hover:text-primary transition-colors"
+                  disabled={submitting}
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
+
             {error && (
               <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -129,11 +175,7 @@ export default function Login() {
               </div>
             )}
 
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={submitting}
-            >
+            <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? (
                 <span className="flex items-center gap-2">
                   <div className="w-4 h-4 rounded-full border-2 border-primary-foreground border-t-transparent animate-spin" />
@@ -147,7 +189,11 @@ export default function Login() {
 
           <div className="mt-4 text-center">
             <button
-              onClick={() => { setIsSignUp(!isSignUp); setError(''); setSuccess(''); }}
+              onClick={() => {
+                setIsSignUp(!isSignUp);
+                setError('');
+                setSuccess('');
+              }}
               className="text-sm text-muted-foreground hover:text-primary transition-colors"
             >
               {isSignUp ? 'Already have an account? Sign in' : "Don't have an account? Sign up"}
