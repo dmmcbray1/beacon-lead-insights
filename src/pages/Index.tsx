@@ -12,6 +12,8 @@ import { formatPercent, formatNumber } from '@/lib/metrics';
 
 const kpis = getSeedKPIs();
 const trendData = getSeedTrendData();
+const nb = kpis.newBreakdown;
+const rb = kpis.reQuoteBreakdown;
 
 const contactTiming = [
   { label: 'Day 0–1', count: 287, pct: 44.8 },
@@ -38,10 +40,8 @@ export default function Dashboard() {
       summaryLabel: 'Total Leads',
       icon: Layers,
       color: 'hsl(var(--kpi-leads))',
-      subMetrics: [
-        { label: 'Total Leads', value: formatNumber(kpis.totalLeads), icon: Users, color: 'hsl(var(--kpi-leads))' },
-        { label: 'New Leads', value: formatNumber(kpis.newLeads), icon: Users, color: 'hsl(var(--kpi-leads))' },
-        { label: 'Re-Quote Leads', value: formatNumber(kpis.reQuoteLeads), icon: ArrowRightLeft, color: 'hsl(var(--kpi-callbacks))' },
+      breakdownRows: [
+        { label: 'Total Leads', newValue: formatNumber(nb.leads), reQuoteValue: formatNumber(rb.leads) },
       ],
     },
     {
@@ -50,11 +50,11 @@ export default function Dashboard() {
       summaryLabel: 'Contact Rate',
       icon: Activity,
       color: 'hsl(var(--kpi-contacts))',
-      subMetrics: [
-        { label: 'Total Contacts', value: formatNumber(kpis.totalContacts), icon: UserCheck, color: 'hsl(var(--kpi-contacts))' },
-        { label: 'Contact Rate', value: formatPercent(kpis.contactRate), icon: Percent, color: 'hsl(var(--kpi-contacts))' },
-        { label: 'Total Callbacks', value: formatNumber(kpis.totalCallbacks), icon: PhoneIncoming, color: 'hsl(var(--kpi-callbacks))' },
-        { label: 'Callback → Quote', value: formatPercent(kpis.callbackToQuoteRate), icon: PhoneCall, color: 'hsl(var(--kpi-callbacks))' },
+      breakdownRows: [
+        { label: 'Contacts', newValue: formatNumber(nb.contacts), reQuoteValue: formatNumber(rb.contacts) },
+        { label: 'Contact Rate', newValue: formatPercent(nb.contactRate), reQuoteValue: formatPercent(rb.contactRate) },
+        { label: 'Callbacks', newValue: formatNumber(nb.callbacks), reQuoteValue: formatNumber(rb.callbacks) },
+        { label: 'CB → Quote', newValue: formatPercent(nb.callbackToQuoteRate), reQuoteValue: formatPercent(rb.callbackToQuoteRate) },
       ],
     },
     {
@@ -63,12 +63,12 @@ export default function Dashboard() {
       summaryLabel: 'Quote Rate',
       icon: Target,
       color: 'hsl(var(--kpi-quotes))',
-      subMetrics: [
-        { label: 'Quoted Households', value: formatNumber(kpis.totalQuotedHouseholds), icon: FileCheck, color: 'hsl(var(--kpi-quotes))' },
-        { label: 'Quote Rate', value: formatPercent(kpis.quoteRate), icon: Target, color: 'hsl(var(--kpi-quotes))' },
-        { label: 'Contact → Quote', value: formatPercent(kpis.contactToQuoteRate), icon: TrendingUp, color: 'hsl(var(--kpi-leads))' },
-        { label: 'Avg Calls to Quote', value: kpis.avgCallsToQuote.toFixed(1), icon: BarChart3, color: 'hsl(var(--kpi-quotes))' },
-        { label: 'Avg Days to Quote', value: kpis.avgDaysToQuote.toFixed(1), icon: Clock, color: 'hsl(var(--kpi-leads))' },
+      breakdownRows: [
+        { label: 'Quoted', newValue: formatNumber(nb.quoted), reQuoteValue: formatNumber(rb.quoted) },
+        { label: 'Quote Rate', newValue: formatPercent(nb.quoteRate), reQuoteValue: formatPercent(rb.quoteRate) },
+        { label: 'Contact → Quote', newValue: formatPercent(nb.contactToQuoteRate), reQuoteValue: formatPercent(rb.contactToQuoteRate) },
+        { label: 'Avg Calls to Qt', newValue: nb.avgCallsToQuote.toFixed(1), reQuoteValue: rb.avgCallsToQuote.toFixed(1) },
+        { label: 'Avg Days to Qt', newValue: nb.avgDaysToQuote.toFixed(1), reQuoteValue: rb.avgDaysToQuote.toFixed(1) },
       ],
     },
     {
@@ -77,11 +77,11 @@ export default function Dashboard() {
       summaryLabel: 'Avg Days to Sold (Seen)',
       icon: ShieldCheck,
       color: 'hsl(var(--kpi-contacts))',
-      subMetrics: [
-        { label: 'Days to Sold (Seen)', value: kpis.avgDaysToSoldFromSeen.toFixed(1), icon: CheckCircle2, color: 'hsl(var(--kpi-contacts))' },
-        { label: 'Days to Sold (Contact)', value: kpis.avgDaysToSoldFromContact.toFixed(1), icon: CheckCircle2, color: 'hsl(var(--kpi-contacts))' },
-        { label: 'Quote → Sold Days', value: kpis.avgDaysQuoteToSold.toFixed(1), icon: Clock, color: 'hsl(var(--kpi-quotes))' },
-        { label: 'Quote → Sold Calls', value: kpis.avgCallsQuoteToSold.toFixed(1), icon: BarChart3, color: 'hsl(var(--kpi-quotes))' },
+      breakdownRows: [
+        { label: 'Days Sold (Seen)', newValue: nb.avgDaysToSoldFromSeen.toFixed(1), reQuoteValue: rb.avgDaysToSoldFromSeen.toFixed(1) },
+        { label: 'Days Sold (Contact)', newValue: nb.avgDaysToSoldFromContact.toFixed(1), reQuoteValue: rb.avgDaysToSoldFromContact.toFixed(1) },
+        { label: 'Qt → Sold Days', newValue: nb.avgDaysQuoteToSold.toFixed(1), reQuoteValue: rb.avgDaysQuoteToSold.toFixed(1) },
+        { label: 'Qt → Sold Calls', newValue: nb.avgCallsQuoteToSold.toFixed(1), reQuoteValue: rb.avgCallsQuoteToSold.toFixed(1) },
       ],
     },
     {
@@ -90,11 +90,9 @@ export default function Dashboard() {
       summaryLabel: 'Bad Phone Numbers',
       icon: AlertTriangle,
       color: 'hsl(var(--kpi-bad))',
-      subMetrics: [
-        { label: 'Bad Phone Count', value: formatNumber(kpis.badPhoneCount), icon: PhoneOff, color: 'hsl(var(--kpi-bad))' },
-        { label: '% of Total Leads', value: formatPercent(kpis.badPhoneRate), icon: Percent, color: 'hsl(var(--kpi-bad))' },
-        { label: 'New Lead Bad Phone', value: `${formatNumber(kpis.badPhoneNewCount)} (${formatPercent(kpis.badPhoneNewRate)})`, icon: Users, color: 'hsl(var(--kpi-leads))' },
-        { label: 'Re-Quote Bad Phone', value: `${formatNumber(kpis.badPhoneReQuoteCount)} (${formatPercent(kpis.badPhoneReQuoteRate)})`, icon: ArrowRightLeft, color: 'hsl(var(--kpi-callbacks))' },
+      breakdownRows: [
+        { label: 'Bad Phone Count', newValue: formatNumber(nb.badPhoneCount), reQuoteValue: formatNumber(rb.badPhoneCount) },
+        { label: 'Bad Phone %', newValue: formatPercent(nb.badPhoneRate), reQuoteValue: formatPercent(rb.badPhoneRate) },
       ],
     },
   ];
@@ -119,7 +117,6 @@ export default function Dashboard() {
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        {/* Trend Chart */}
         <div className="lg:col-span-2 bg-card rounded-lg border p-5">
           <h3 className="section-title mb-4">Daily Trends</h3>
           <ResponsiveContainer width="100%" height={280}>
@@ -156,7 +153,6 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
 
-        {/* Contact Timing */}
         <div className="bg-card rounded-lg border p-5">
           <h3 className="section-title mb-4">Contact Timing</h3>
           <p className="text-xs text-muted-foreground mb-4">Days from first seen to first contact</p>
@@ -183,33 +179,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Comparison: New vs Re-Quote */}
-      <div className="bg-card rounded-lg border p-5 mb-8">
-        <h3 className="section-title mb-4">New Leads vs Re-Quotes</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          {[
-            { metric: 'Contact Rate', newVal: '49.2%', reqVal: '56.8%' },
-            { metric: 'Quote Rate', newVal: '15.4%', reqVal: '22.3%' },
-            { metric: 'Contact → Quote', newVal: '31.3%', reqVal: '39.3%' },
-            { metric: 'Avg Days to Quote', newVal: '7.4', reqVal: '5.1' },
-          ].map(row => (
-            <div key={row.metric} className="text-center">
-              <p className="text-sm text-muted-foreground mb-2">{row.metric}</p>
-              <div className="flex items-center justify-center gap-4">
-                <div>
-                  <p className="text-lg font-bold text-primary tabular-nums">{row.newVal}</p>
-                  <p className="text-[11px] text-muted-foreground">New</p>
-                </div>
-                <div className="w-px h-8 bg-border" />
-                <div>
-                  <p className="text-lg font-bold tabular-nums" style={{ color: 'hsl(var(--kpi-callbacks))' }}>{row.reqVal}</p>
-                  <p className="text-[11px] text-muted-foreground">Re-Quote</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Removed the old New vs Re-Quote comparison section — now integrated into flip cards */}
     </div>
   );
 }

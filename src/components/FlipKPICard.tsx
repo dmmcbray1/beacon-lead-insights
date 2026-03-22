@@ -1,11 +1,10 @@
 import { useState } from 'react';
 import { type LucideIcon, RotateCcw } from 'lucide-react';
 
-interface SubMetric {
+interface BreakdownRow {
   label: string;
-  value: string;
-  icon: LucideIcon;
-  color: string;
+  newValue: string;
+  reQuoteValue: string;
 }
 
 interface FlipKPICardProps {
@@ -14,7 +13,7 @@ interface FlipKPICardProps {
   summaryLabel: string;
   icon: LucideIcon;
   color: string;
-  subMetrics: SubMetric[];
+  breakdownRows: BreakdownRow[];
   className?: string;
 }
 
@@ -24,7 +23,7 @@ export default function FlipKPICard({
   summaryLabel,
   icon: Icon,
   color,
-  subMetrics,
+  breakdownRows,
   className = '',
 }: FlipKPICardProps) {
   const [flipped, setFlipped] = useState(false);
@@ -32,7 +31,7 @@ export default function FlipKPICard({
   return (
     <div
       className={`relative cursor-pointer ${className}`}
-      style={{ perspective: '1000px', minHeight: '180px' }}
+      style={{ perspective: '1000px', minHeight: '200px' }}
       onClick={() => setFlipped(!flipped)}
     >
       <div
@@ -54,8 +53,7 @@ export default function FlipKPICard({
             >
               <Icon className="w-5 h-5" />
             </div>
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              Click to flip
+            <span className="text-xs text-muted-foreground flex items-center gap-1 opacity-60">
               <RotateCcw className="w-3 h-3" />
             </span>
           </div>
@@ -71,22 +69,27 @@ export default function FlipKPICard({
           className="absolute inset-0 kpi-card flex flex-col"
           style={{ backfaceVisibility: 'hidden', transform: 'rotateY(180deg)' }}
         >
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-semibold text-foreground">{title}</p>
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
+            <span className="text-xs text-muted-foreground opacity-60">
               <RotateCcw className="w-3 h-3" />
             </span>
           </div>
-          <div className="flex-1 space-y-2.5 overflow-y-auto">
-            {subMetrics.map((m) => (
-              <div key={m.label} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <m.icon className="w-3.5 h-3.5 shrink-0" style={{ color: m.color }} />
-                  <span className="text-xs text-muted-foreground">{m.label}</span>
-                </div>
-                <span className="text-sm font-bold tabular-nums" style={{ color: m.color }}>
-                  {m.value}
-                </span>
+
+          {/* Header row */}
+          <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 mb-1.5 pb-1.5 border-b border-border">
+            <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Metric</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-primary min-w-[48px] text-right">New</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider min-w-[48px] text-right" style={{ color: 'hsl(var(--kpi-callbacks))' }}>Re-Qt</span>
+          </div>
+
+          {/* Data rows */}
+          <div className="flex-1 space-y-1.5 overflow-y-auto">
+            {breakdownRows.map((row) => (
+              <div key={row.label} className="grid grid-cols-[1fr_auto_auto] gap-x-3 items-center">
+                <span className="text-xs text-muted-foreground truncate">{row.label}</span>
+                <span className="text-xs font-bold tabular-nums text-primary min-w-[48px] text-right">{row.newValue}</span>
+                <span className="text-xs font-bold tabular-nums min-w-[48px] text-right" style={{ color: 'hsl(var(--kpi-callbacks))' }}>{row.reQuoteValue}</span>
               </div>
             ))}
           </div>
