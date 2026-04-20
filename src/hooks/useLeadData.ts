@@ -494,7 +494,7 @@ export function useDailyTrends(filters: Filters) {
         const row = byDate.get(ev.call_date)!;
         row.totalCalls++;
         if (ev.is_contact) row.contacts++;
-        if ((ev as any).is_voicemail) row.voicemails++;
+        if (ev.is_voicemail) row.voicemails++;
         if (ev.is_callback) row.callbacks++;
       }
 

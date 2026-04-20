@@ -75,8 +75,8 @@ export default function Login() {
         if (error) throw error;
         navigate('/', { replace: true });
       }
-    } catch (err: any) {
-      const rawMessage = err.message || 'An error occurred';
+    } catch (err) {
+      const rawMessage = err instanceof Error ? err.message : 'An error occurred';
       if (rawMessage.toLowerCase().includes('invalid login credentials')) {
         setError('Incorrect email or password. If this account already exists, use Forgot password.');
       } else {

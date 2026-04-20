@@ -86,8 +86,8 @@ export default function ResetPassword() {
       setTimeout(() => {
         navigate('/login', { replace: true });
       }, 1500);
-    } catch (err: any) {
-      const message = err?.message || 'Failed to update password.';
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update password.';
       if (message.toLowerCase().includes('auth session missing')) {
         setError('This reset link is invalid or expired. Please request a new reset email from login.');
       } else {
