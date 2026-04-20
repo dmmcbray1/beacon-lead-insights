@@ -94,6 +94,21 @@ export default function UserManagement() {
     fetchData();
   };
 
+  const updateAgency = async (profile: UserProfile, agencyId: string | null) => {
+    const { error } = await supabase
+      .from('user_profiles')
+      .update({ agency_id: agencyId })
+      .eq('id', profile.id);
+
+    if (error) {
+      toast.error('Failed to update agency: ' + error.message);
+      return;
+    }
+
+    toast.success(`Updated agency for ${profile.email}`);
+    fetchData();
+  };
+
   const makeAdmin = async (profile: UserProfile) => {
     const { error } = await supabase
       .from('user_roles')
@@ -195,24 +210,13 @@ export default function UserManagement() {
                   </thead>
                   <tbody>
                     {approved.map(p => (
-                      <tr key={p.id} className="border-b last:border-0">
-                        <td className="px-4 py-3 text-foreground">{p.email}</td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2 py-0.5 rounded">
-                            <Building2 className="w-3 h-3" />
-                            {p.agency_name || 'No agency'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">
-                          {new Date(p.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-4 py-3">
-                          <Button variant="ghost" size="sm" onClick={() => makeAdmin(p)}>
-                            <ShieldCheck className="w-3.5 h-3.5 mr-1" />
-                            Make Admin
-                          </Button>
-                        </td>
-                      </tr>
+                      <ApprovedUserRow
+                        key={p.id}
+                        profile={p}
+                        agencies={agencies}
+                        onUpdateAgency={updateAgency}
+                        onMakeAdmin={makeAdmin}
+                      />
                     ))}
                   </tbody>
                 </table>
@@ -319,5 +323,60 @@ function PendingUserCard({
         </Button>
       </div>
     </div>
+  );
+}
+
+function ApprovedUserRow({
+  profile,
+  agencies,
+  onUpdateAgency,
+  onMakeAdmin,
+}: {
+  profile: UserProfile;
+  agencies: Agency[];
+  onUpdateAgency: (p: UserProfile, agencyId: string | null) => void;
+  onMakeAdmin: (p: UserProfile) => void;
+}) {
+  const currentAgency = profile.agency_id ?? '';
+  const [selectedAgency, setSelectedAgency] = useState(currentAgency);
+  const hasChange = selectedAgency !== currentAgency;
+
+  return (
+    <tr className="border-b last:border-0">
+      <td className="px-4 py-3 text-foreground">{profile.email}</td>
+      <td className="px-4 py-3">
+        <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2 py-0.5 rounded">
+          <Building2 className="w-3 h-3" />
+          {profile.agency_name || 'No agency'}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-muted-foreground">
+        {new Date(profile.created_at).toLocaleDateString()}
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background text-foreground"
+            value={selectedAgency}
+            onChange={e => setSelectedAgency(e.target.value)}
+          >
+            <option value="">— No agency —</option>
+            {agencies.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasChange}
+            onClick={() => onUpdateAgency(profile, selectedAgency || null)}
+          >
+            Save
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => onMakeAdmin(profile)}>
+            <ShieldCheck className="w-3.5 h-3.5 mr-1" />
+            Make Admin
+          </Button>
+        </div>
+      </td>
+    </tr>
   );
 }
