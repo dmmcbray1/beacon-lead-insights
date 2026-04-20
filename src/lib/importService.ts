@@ -163,6 +163,8 @@ function parseDate(val: unknown): string | null {
   if (!s) return null;
   const d = new Date(s);
   if (isNaN(d.getTime())) return null;
+  const yr = d.getUTCFullYear();
+  if (yr < 1900 || yr > 2100) return null;
   return d.toISOString().split('T')[0];
 }
 
@@ -684,7 +686,7 @@ export async function importDailyCallReport(
       resolved_lead_phone: vr.phone,
       matched_lead_id: state.id,
       match_rule: existingMap.has(vr.phone) ? 'phone' : 'new',
-      processing_status: 'processed',
+      processing_status: 'matched',
       raw_data: vr.raw,
     });
 
@@ -1119,7 +1121,7 @@ export async function importDeerDamaReport(
       lead_main_state: str(vr.raw['Lead Main State']),
       matched_lead_id: state.id,
       match_rule: state.matchRule,
-      processing_status: 'processed',
+      processing_status: 'matched',
       raw_data: vr.raw,
     });
 
