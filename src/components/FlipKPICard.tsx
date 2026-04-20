@@ -63,11 +63,12 @@ export default function FlipKPICard({
       }
     };
 
+    const trigger = triggerRef.current;
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       clearTimeout(timer);
       document.removeEventListener('keydown', handleKeyDown);
-      triggerRef.current?.focus();
+      trigger?.focus();
     };
   }, [open]);
 

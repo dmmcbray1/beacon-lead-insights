@@ -36,8 +36,8 @@ export default function Login() {
       });
       if (error) throw error;
       setSuccess('Password reset email sent. Check your inbox for the reset link.');
-    } catch (err: any) {
-      setError(err.message || 'Unable to send password reset email.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Unable to send password reset email.');
     } finally {
       setSubmitting(false);
     }

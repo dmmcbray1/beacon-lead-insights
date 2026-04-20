@@ -335,7 +335,7 @@ export function useStaffPerformance(filters: Filters) {
         if (ev.is_callback) agg.callbacks.add(ev.lead_id);
         if (ev.is_quote) agg.quoted.add(ev.lead_id);
         if (ev.is_bad_phone) agg.badPhone.add(ev.lead_id);
-        if ((ev as any).is_voicemail) {
+        if (ev.is_voicemail) {
           agg.voicemailLeads.add(ev.lead_id);
           agg.voicemailCalls++;
         }
@@ -438,7 +438,7 @@ export function useCallQuality(filters: Filters) {
       // Voicemail call rate (outbound only)
       const outboundEvents = events.filter(e => e.call_direction === 'outbound');
       const totalOutboundCalls = outboundEvents.length;
-      const voicemailCallCount = outboundEvents.filter(e => (e as any).is_voicemail).length;
+      const voicemailCallCount = outboundEvents.filter(e => e.is_voicemail).length;
       const voicemailCallRate = totalOutboundCalls > 0 ? voicemailCallCount / totalOutboundCalls : 0;
 
       return {

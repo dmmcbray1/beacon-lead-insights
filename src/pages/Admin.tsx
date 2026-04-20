@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Settings, FileText, Phone, Tag, Building2, Users, AlertTriangle } from 'lucide-react';
+import { Settings, FileText, Phone, Tag, Building2, Users, AlertTriangle, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CONTACT_DISPOSITIONS, QUOTE_DISPOSITIONS, BAD_PHONE_STATUSES, DEFAULT_CALL_TYPE_MAPPINGS, CALLBACK_CALL_TYPES } from '@/lib/constants';
 
@@ -8,7 +8,7 @@ type Tab = 'dispositions' | 'call_types' | 'agencies' | 'staff' | 'data_quality'
 export default function Admin() {
   const [tab, setTab] = useState<Tab>('dispositions');
 
-  const tabs: { id: Tab; label: string; icon: any }[] = [
+  const tabs: { id: Tab; label: string; icon: LucideIcon }[] = [
     { id: 'dispositions', label: 'Disposition Mapping', icon: Tag },
     { id: 'call_types', label: 'Call Type Mapping', icon: Phone },
     { id: 'agencies', label: 'Agencies', icon: Building2 },

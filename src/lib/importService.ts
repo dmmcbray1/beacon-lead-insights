@@ -624,7 +624,8 @@ export async function importDailyCallReport(
   for (let i = 0; i < callEventBatch.length; i += CALL_BATCH) {
     const { error } = await supabase
       .from('call_events')
-      .insert(callEventBatch.slice(i, i + CALL_BATCH) as Parameters<typeof supabase.from>[0] extends never ? never : any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(callEventBatch.slice(i, i + CALL_BATCH) as any);
     if (error) errors.push(`call_events batch error: ${error.message}`);
 
     onProgress?.({ phase: 'Saving call events…', processed: Math.min(i + CALL_BATCH, callEventBatch.length), total: callEventBatch.length });
@@ -633,6 +634,7 @@ export async function importDailyCallReport(
   for (let i = 0; i < rawRowBatch.length; i += CALL_BATCH) {
     const { error } = await supabase
       .from('raw_daily_call_rows')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .insert(rawRowBatch.slice(i, i + CALL_BATCH) as any);
     if (error) errors.push(`raw_daily_call_rows batch error: ${error.message}`);
   }

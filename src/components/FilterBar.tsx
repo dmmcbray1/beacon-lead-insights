@@ -3,16 +3,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAgencies, useStaffMembers } from '@/hooks/useLeadData';
 import { useAuth } from '@/hooks/useAuth';
 
+interface FilterBarFilters {
+  dateRange: string;
+  agency: string;
+  staff: string;
+  leadType: string;
+  dateBasis: string;
+  vendorFilter?: boolean;
+}
+
 interface FilterBarProps {
-  filters: {
-    dateRange: string;
-    agency: string;
-    staff: string;
-    leadType: string;
-    dateBasis: string;
-    vendorFilter?: boolean;
-  };
-  onChange: (filters: any) => void;
+  filters: FilterBarFilters;
+  onChange: (filters: FilterBarFilters) => void;
 }
 
 export default function FilterBar({ filters, onChange }: FilterBarProps) {
