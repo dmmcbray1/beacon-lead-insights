@@ -2,6 +2,16 @@ import { useState, useCallback } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { REPORT_TYPES, DAILY_CALL_COLUMNS, DEER_DAMA_COLUMNS } from '@/lib/constants';
 import { importDailyCallReport, importDeerDamaReport, parseFile, type ImportProgress, type ImportResult } from '@/lib/importService';
@@ -50,6 +60,7 @@ export default function UploadCenter() {
 
   const [state, setState] = useState<UploadState>(initialState);
   const [dragOver, setDragOver] = useState(false);
+  const [duplicatePrompt, setDuplicatePrompt] = useState<ImportResult['duplicateOf'] | null>(null);
 
   const handleFile = useCallback(async (file: File) => {
     try {
@@ -87,7 +98,7 @@ export default function UploadCenter() {
     if (file) handleFile(file);
   }, [handleFile]);
 
-  const handleImport = async () => {
+  const runImport = async (force: boolean) => {
     if (!state.file || !state.reportType || !agencyId) return;
 
     setState((prev) => ({ ...prev, step: 'importing', progress: null }));
@@ -101,9 +112,15 @@ export default function UploadCenter() {
         ? importDailyCallReport
         : importDeerDamaReport;
 
-    const result = await fn(state.file, agencyId, state.uploadDate, state.notes, onProgress);
+    const result = await fn(state.file, agencyId, state.uploadDate, state.notes, onProgress, force);
 
-    // Invalidate all lead-related queries so dashboards refresh
+    if (result.duplicateOf && !force) {
+      // Return to preview and surface the confirm dialog. No data was written.
+      setDuplicatePrompt(result.duplicateOf);
+      setState((prev) => ({ ...prev, step: 'preview', progress: null }));
+      return;
+    }
+
     await queryClient.invalidateQueries({ queryKey: ['leads'] });
     await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
     await queryClient.invalidateQueries({ queryKey: ['uploads'] });
@@ -112,7 +129,19 @@ export default function UploadCenter() {
     setState((prev) => ({ ...prev, step: 'summary', result }));
   };
 
-  const reset = () => setState(initialState);
+  const handleImport = () => runImport(false);
+
+  const handleDuplicateConfirm = () => {
+    setDuplicatePrompt(null);
+    runImport(true);
+  };
+
+  const handleDuplicateCancel = () => setDuplicatePrompt(null);
+
+  const reset = () => {
+    setDuplicatePrompt(null);
+    setState(initialState);
+  };
 
   const reportLabel = (type: string) =>
     type === REPORT_TYPES.DAILY_CALL ? 'Daily Call Report' : type === REPORT_TYPES.DEER_DAMA ? 'Deer Dama (Lead) Report' : 'Unknown';
@@ -326,6 +355,28 @@ export default function UploadCenter() {
           </div>
         </div>
       )}
+
+      {/* ── Duplicate-import confirmation ─────────────────────────────────── */}
+      <AlertDialog open={duplicatePrompt !== null} onOpenChange={(o) => { if (!o) handleDuplicateCancel(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>This file was already uploaded</AlertDialogTitle>
+            <AlertDialogDescription>
+              {duplicatePrompt && (
+                <>
+                  An identical file (<span className="font-medium">{duplicatePrompt.fileName}</span>)
+                  was uploaded on <span className="font-medium">{duplicatePrompt.uploadDate}</span>.
+                  Re-importing will likely double-count the rows. Import anyway?
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleDuplicateCancel}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDuplicateConfirm}>Import anyway</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Recent Uploads ────────────────────────────────────────────────── */}
       {state.step === 'select' && (

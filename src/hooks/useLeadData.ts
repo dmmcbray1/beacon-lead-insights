@@ -151,6 +151,36 @@ const LEAD_SELECT = `
   has_bad_phone, latest_vendor_name, lead_id_external
 `;
 
+/**
+ * When a staff filter is active, resolve the set of lead_ids that staff has
+ * touched in the current date range. Returns null when no staff filter is
+ * active (caller should skip the .in() step). Returns an empty array when
+ * the staff has no matching events (caller should return [] without querying).
+ */
+async function resolveStaffLeadIds(
+  filters: Filters,
+  effectiveAgencyId: string | null,
+): Promise<string[] | null> {
+  if (!filters.staff || filters.staff === 'all') return null;
+
+  const { from, to } = getDateBounds(filters.dateRange);
+  let q = supabase
+    .from('call_events')
+    .select('lead_id')
+    .eq('staff_id', filters.staff)
+    .limit(100000);
+
+  if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+  if (from) q = q.gte('call_date', from);
+  if (to) q = q.lte('call_date', to);
+
+  const { data, error } = await q;
+  if (error) throw error;
+  const ids = new Set<string>();
+  for (const ev of data ?? []) if (ev.lead_id) ids.add(ev.lead_id);
+  return [...ids];
+}
+
 export function useLeads(filters: Filters) {
   const { agencyId, isAdmin } = useAuth();
   const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
@@ -161,6 +191,9 @@ export function useLeads(filters: Filters) {
       const { from, to } = getDateBounds(filters.dateRange);
       const dateField = getDateField(filters.dateBasis);
 
+      const staffLeadIds = await resolveStaffLeadIds(filters, effectiveAgencyId);
+      if (staffLeadIds && staffLeadIds.length === 0) return [];
+
       let query = supabase
         .from('leads')
         .select(LEAD_SELECT)
@@ -168,6 +201,7 @@ export function useLeads(filters: Filters) {
         .limit(10000);
 
       if (effectiveAgencyId) query = query.eq('agency_id', effectiveAgencyId);
+      if (staffLeadIds) query = query.in('id', staffLeadIds);
 
       if (from) query = query.gte(dateField, from);
       if (to) query = query.lte(dateField, to + 'T23:59:59');
@@ -588,6 +622,9 @@ export function useLeadList(filters: Filters & { search?: string }) {
       const { from, to } = getDateBounds(filters.dateRange);
       const dateField = getDateField(filters.dateBasis);
 
+      const staffLeadIds = await resolveStaffLeadIds(filters, effectiveAgencyId);
+      if (staffLeadIds && staffLeadIds.length === 0) return [];
+
       let q = supabase
         .from('leads')
         .select(LEAD_SELECT)
@@ -595,6 +632,7 @@ export function useLeadList(filters: Filters & { search?: string }) {
         .limit(500);
 
       if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+      if (staffLeadIds) q = q.in('id', staffLeadIds);
       if (from) q = q.gte(dateField, from);
       if (to) q = q.lte(dateField, to + 'T23:59:59');
       if (filters.leadType === 'new') q = q.eq('current_lead_type', 'new_lead');

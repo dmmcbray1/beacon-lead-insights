@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useLeadList, type Filters } from '@/hooks/useLeadData';
 import { formatPhone } from '@/lib/phone';
+import { exportLeadsToXlsx } from '@/lib/exportService';
 
 export default function LeadExplorer() {
   const [search, setSearch] = useState('');
@@ -40,7 +41,12 @@ export default function LeadExplorer() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">Search and filter all lead records</p>
         </div>
-        <Button variant="outline" size="sm" disabled>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={filtered.length === 0}
+          onClick={() => exportLeadsToXlsx(filtered)}
+        >
           <Download className="w-4 h-4 mr-1.5" /> Export CSV
         </Button>
       </div>

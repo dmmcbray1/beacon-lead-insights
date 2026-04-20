@@ -38,9 +38,70 @@ export interface ImportResult {
   newLeads: number;
   updatedLeads: number;
   errors: string[];
+  /**
+   * Set when the file matches a previously-imported file (same SHA-256 hash
+   * within the same agency) and the caller did not pass `force: true`.
+   * When present, no rows were imported — the caller should prompt the user
+   * to confirm and re-invoke the importer with `force: true`.
+   */
+  duplicateOf?: {
+    uploadId: string;
+    fileName: string;
+    uploadDate: string;
+  };
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/** Compute the SHA-256 hex digest of a file's raw bytes. */
+async function computeFileHash(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Look up an existing upload with the same hash in the same agency.
+ * Returns `null` when there is no prior match.
+ */
+async function findDuplicateUpload(
+  fileHash: string,
+  agencyId: string,
+): Promise<{ uploadId: string; fileName: string; uploadDate: string } | null> {
+  const { data } = await supabase
+    .from('uploads')
+    .select('id, file_name, upload_date')
+    .eq('agency_id', agencyId)
+    .eq('file_hash', fileHash)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const match = data?.[0];
+  if (!match) return null;
+  return {
+    uploadId: match.id,
+    fileName: match.file_name,
+    uploadDate: match.upload_date,
+  };
+}
+
+function buildDuplicateResult(
+  rowsTotal: number,
+  duplicateOf: { uploadId: string; fileName: string; uploadDate: string },
+): ImportResult {
+  return {
+    uploadId: '',
+    rowsTotal,
+    rowsImported: 0,
+    rowsFiltered: 0,
+    rowsSkipped: 0,
+    newLeads: 0,
+    updatedLeads: 0,
+    errors: [],
+    duplicateOf,
+  };
+}
 
 /** Parse a File (CSV or XLSX) into an array of plain objects. */
 export function parseFile(file: File): Promise<Record<string, unknown>[]> {
@@ -215,6 +276,7 @@ export async function importDailyCallReport(
   uploadDate: string,
   notes: string,
   onProgress?: (p: ImportProgress) => void,
+  force = false,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -237,6 +299,13 @@ export async function importDailyCallReport(
     };
   }
 
+  // Duplicate-import detection
+  const fileHash = await computeFileHash(file);
+  if (!force) {
+    const dup = await findDuplicateUpload(fileHash, agencyId);
+    if (dup) return buildDuplicateResult(rows.length, dup);
+  }
+
   // Create upload record
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
@@ -248,6 +317,9 @@ export async function importDailyCallReport(
       notes,
       status: 'processing',
       row_count: rows.length,
+      // Store hash only on the first (non-forced) import so override re-imports
+      // remain permitted under the partial unique index.
+      file_hash: force ? null : fileHash,
     })
     .select('id')
     .single();
@@ -670,6 +742,7 @@ export async function importDeerDamaReport(
   uploadDate: string,
   notes: string,
   onProgress?: (p: ImportProgress) => void,
+  force = false,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -692,6 +765,13 @@ export async function importDeerDamaReport(
     };
   }
 
+  // Duplicate-import detection
+  const fileHash = await computeFileHash(file);
+  if (!force) {
+    const dup = await findDuplicateUpload(fileHash, agencyId);
+    if (dup) return buildDuplicateResult(rows.length, dup);
+  }
+
   const { data: upload, error: uploadErr } = await supabase
     .from('uploads')
     .insert({
@@ -702,6 +782,7 @@ export async function importDeerDamaReport(
       notes,
       status: 'processing',
       row_count: rows.length,
+      file_hash: force ? null : fileHash,
     })
     .select('id')
     .single();
@@ -725,184 +806,351 @@ export async function importDeerDamaReport(
   let newLeads = 0;
   let updatedLeads = 0;
 
-  onProgress?.({ phase: 'Processing leads…', processed: 0, total: rows.length });
+  // ── Phase 1: Parse & validate all rows ──────────────────────────────────
+  onProgress?.({ phase: 'Validating rows…', processed: 0, total: rows.length });
+
+  type ProcessedRow = {
+    raw: Record<string, unknown>;
+    rowNum: number;
+    phone: string;
+    phoneRaw: string;
+    externalId: string;
+    fullName: string;
+    leadStatus: string;
+    leadOwner: string;
+    createdAtStr: string | null;
+    vendor: string;
+    firstCallStr: string | null;
+    lastCallStr: string | null;
+    totalCalls: number;
+    isContact: boolean;
+    isBadPhone: boolean;
+    isQuote: boolean;
+    isSold: boolean;
+    leadType: 'new_lead' | 're_quote';
+  };
+
+  const validRows: ProcessedRow[] = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-
-    try {
-      const externalId = str(row['Lead ID']);
-      const fullName = str(row['Full Name']);
-      const leadStatus = str(row['Lead Status']);
-      const leadOwner = str(row['Lead Owner']);
-      const createdAtStr = parseDate(row['Created At']);
-      const vendor = str(row['Vendor']);
-      const firstCallStr = parseDate(row['First Call Date']);
-      const lastCallStr = parseDate(row['Last Call Date']);
-      const totalCalls = int(row['Total Calls']);
-      const phoneRaw = str(row['Phone - Main']);
-      const normalizedPh = normalizePhone(phoneRaw);
-
-      if (!normalizedPh) {
-        rowsSkipped++;
-        continue;
-      }
-
-      const statusLower = leadStatus.toLowerCase().trim();
-      const isContact = CONTACT_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower);
-      const isBadPhone = BAD_PHONE_STATUSES.some((d) => d.toLowerCase() === statusLower);
-      const isQuote = QUOTE_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower);
-      const isSold = SOLD_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower);
-      const leadType = getLeadType(leadStatus);
-
-      // Look up lead: by external ID first, then phone
-      let leadId: string | null = null;
-      if (externalId) leadId = await lookupLeadByExternalId(externalId, agencyId);
-
-      // Always fetch by phone — needed to check existing date fields regardless of
-      // how the lead was found. When found by externalId, existingByPhone may differ
-      // (different phone on file) but we still need the existing quote/sold dates.
-      const { data: byPhone } = await supabase
-        .from('leads')
-        .select('id, first_seen_date, first_contact_date, first_quote_date, first_sold_date, total_call_attempts')
-        .eq('normalized_phone', normalizedPh)
-        .eq('agency_id', agencyId)
-        .limit(1);
-
-      const existingByPhone = byPhone?.[0] ?? null;
-      if (!leadId && existingByPhone) leadId = existingByPhone.id;
-
-      // Capture new/existing status for THIS row before any insert/update
-      const isThisLeadNew = !leadId;
-
-      // Resolve existing dates for the matched lead.
-      // If the lead was found by phone, existingByPhone already has them.
-      // If found by externalId only (phone mismatch), fetch by id to avoid
-      // blindly overwriting first_quote_date / first_sold_date on re-import.
-      let existingDates: { first_contact_date: string | null; first_quote_date: string | null; first_sold_date: string | null } | null =
-        existingByPhone?.id === leadId ? existingByPhone : null;
-      if (!existingDates && leadId) {
-        const { data: byId } = await supabase
-          .from('leads')
-          .select('first_contact_date, first_quote_date, first_sold_date')
-          .eq('id', leadId)
-          .single();
-        existingDates = byId ?? null;
-      }
-
-      const staffId = leadOwner ? await getOrCreateStaff(leadOwner, agencyId) : null;
-
-      if (!leadId) {
-        // Create new lead
-        const { data: newLead, error: createErr } = await supabase
-          .from('leads')
-          .insert({
-            agency_id: agencyId,
-            normalized_phone: normalizedPh,
-            raw_phone: phoneRaw,
-            lead_id_external: externalId || null,
-            current_lead_type: leadType,
-            current_status: leadStatus,
-            first_seen_date: createdAtStr,
-            first_deer_dama_date: createdAtStr,
-            latest_call_date: lastCallStr,
-            latest_vendor_name: vendor,
-            total_call_attempts: totalCalls,
-            has_bad_phone: isBadPhone,
-            first_contact_date: isContact && firstCallStr ? firstCallStr : null,
-            first_quote_date: isQuote && firstCallStr ? firstCallStr : null,
-            first_sold_date: isSold && firstCallStr ? firstCallStr : null,
-            calls_at_first_quote: isQuote ? totalCalls : null,
-            calls_at_first_sold: isSold ? totalCalls : null,
-          })
-          .select('id')
-          .single();
-
-        if (createErr || !newLead) {
-          errors.push(`Row ${i + 1}: ${createErr?.message ?? 'unknown'}`);
-          rowsSkipped++;
-          continue;
-        }
-
-        leadId = newLead.id;
-        newLeads++;
-      } else {
-        // Update existing lead
-        const updates: Record<string, unknown> = {
-          current_status: leadStatus,
-          current_lead_type: leadType,
-          total_call_attempts: totalCalls,
-          latest_vendor_name: vendor || undefined,
-        };
-
-        if (externalId) updates.lead_id_external = externalId;
-        if (lastCallStr) updates.latest_call_date = lastCallStr;
-        if (isBadPhone) updates.has_bad_phone = true;
-        if (createdAtStr) updates.first_deer_dama_date = createdAtStr;
-        if (isQuote && !existingDates?.first_quote_date) {
-          updates.first_quote_date = firstCallStr;
-          updates.calls_at_first_quote = totalCalls;
-        }
-        if (isSold && !existingDates?.first_sold_date) {
-          updates.first_sold_date = firstCallStr;
-          updates.calls_at_first_sold = totalCalls;
-        }
-        if (isContact && firstCallStr) {
-          if (!existingDates?.first_contact_date || firstCallStr < existingDates.first_contact_date) {
-            updates.first_contact_date = firstCallStr;
-          }
-        }
-
-        await supabase.from('leads').update(updates).eq('id', leadId);
-        updatedLeads++;
-      }
-
-      // Insert raw row
-      await supabase.from('raw_deer_dama_rows').insert({
-        upload_id: uploadId,
-        row_number: i + 1,
-        lead_id_external: externalId || null,
-        full_name: fullName,
-        first_name: str(row['First Name']),
-        last_name: str(row['Last Name']),
-        email: str(row['Email']),
-        address: str(row['Address']),
-        lead_status: leadStatus,
-        lead_owner: leadOwner,
-        created_at_source: createdAtStr,
-        vendor,
-        first_call_date: firstCallStr,
-        last_call_date: lastCallStr,
-        total_calls: totalCalls,
-        phone_main: phoneRaw,
-        normalized_phone: normalizedPh,
-        lead_main_state: str(row['Lead Main State']),
-        matched_lead_id: leadId,
-        match_rule: isThisLeadNew ? 'new' : externalId ? 'lead_id' : 'phone',
-        processing_status: 'processed',
-        raw_data: row,
-      });
-
-      // Record staff history
-      if (staffId && leadId) {
-        await supabase.from('lead_staff_history').insert({
-          lead_id: leadId,
-          staff_id: staffId,
-          source_type: 'deer_dama',
-          source_upload_id: uploadId,
-          first_seen_date: createdAtStr ?? new Date().toISOString().split('T')[0],
-        });
-      }
-
-      rowsImported++;
-    } catch (e) {
-      errors.push(`Row ${i + 1}: ${String(e)}`);
+    const phoneRaw = str(row['Phone - Main']);
+    const normalizedPh = normalizePhone(phoneRaw);
+    if (!normalizedPh) {
       rowsSkipped++;
+      continue;
     }
 
-    if (i % 25 === 0) {
-      onProgress?.({ phase: 'Processing leads…', processed: i + 1, total: rows.length });
+    const leadStatus = str(row['Lead Status']);
+    const statusLower = leadStatus.toLowerCase().trim();
+
+    validRows.push({
+      raw: row,
+      rowNum: i + 1,
+      phone: normalizedPh,
+      phoneRaw,
+      externalId: str(row['Lead ID']),
+      fullName: str(row['Full Name']),
+      leadStatus,
+      leadOwner: str(row['Lead Owner']),
+      createdAtStr: parseDate(row['Created At']),
+      vendor: str(row['Vendor']),
+      firstCallStr: parseDate(row['First Call Date']),
+      lastCallStr: parseDate(row['Last Call Date']),
+      totalCalls: int(row['Total Calls']),
+      isContact: CONTACT_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower),
+      isBadPhone: BAD_PHONE_STATUSES.some((d) => d.toLowerCase() === statusLower),
+      isQuote: QUOTE_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower),
+      isSold: SOLD_DISPOSITIONS.some((d) => d.toLowerCase() === statusLower),
+      leadType: getLeadType(leadStatus),
+    });
+  }
+
+  // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
+  onProgress?.({ phase: 'Looking up existing leads…', processed: 0, total: validRows.length });
+
+  type ExistingLead = {
+    id: string;
+    first_contact_date: string | null;
+    first_quote_date: string | null;
+    first_sold_date: string | null;
+  };
+
+  const uniquePhones = [...new Set(validRows.map((r) => r.phone))];
+  const uniqueExternalIds = [...new Set(validRows.map((r) => r.externalId).filter(Boolean))];
+
+  const phoneMap = new Map<string, ExistingLead>();
+  const externalIdMap = new Map<string, ExistingLead>();
+
+  const LOOKUP_BATCH = 500;
+  for (let i = 0; i < uniquePhones.length; i += LOOKUP_BATCH) {
+    const chunk = uniquePhones.slice(i, i + LOOKUP_BATCH);
+    const { data } = await supabase
+      .from('leads')
+      .select('id, normalized_phone, first_contact_date, first_quote_date, first_sold_date')
+      .eq('agency_id', agencyId)
+      .in('normalized_phone', chunk);
+    for (const row of data ?? []) {
+      phoneMap.set(row.normalized_phone, {
+        id: row.id,
+        first_contact_date: row.first_contact_date,
+        first_quote_date: row.first_quote_date,
+        first_sold_date: row.first_sold_date,
+      });
     }
+  }
+  for (let i = 0; i < uniqueExternalIds.length; i += LOOKUP_BATCH) {
+    const chunk = uniqueExternalIds.slice(i, i + LOOKUP_BATCH);
+    const { data } = await supabase
+      .from('leads')
+      .select('id, lead_id_external, first_contact_date, first_quote_date, first_sold_date')
+      .eq('agency_id', agencyId)
+      .in('lead_id_external', chunk);
+    for (const row of data ?? []) {
+      if (!row.lead_id_external) continue;
+      externalIdMap.set(row.lead_id_external, {
+        id: row.id,
+        first_contact_date: row.first_contact_date,
+        first_quote_date: row.first_quote_date,
+        first_sold_date: row.first_sold_date,
+      });
+    }
+  }
+
+  // Per-phone state for leads we'll insert or update. Keyed by phone so a
+  // repeated phone in the same file merges into a single new-lead insert
+  // instead of violating the phone-unique constraint.
+  type LeadState = {
+    id: string;
+    isNew: boolean;
+    existing: ExistingLead | null;
+    // Fields we'll write to the lead (new or update)
+    externalId: string;
+    phone: string;
+    phoneRaw: string;
+    leadType: 'new_lead' | 're_quote';
+    leadStatus: string;
+    createdAtStr: string | null;
+    lastCallStr: string | null;
+    vendor: string;
+    totalCalls: number;
+    hasBadPhone: boolean;
+    firstContactDate: string | null;
+    firstQuoteDate: string | null;
+    firstSoldDate: string | null;
+    callsAtFirstQuote: number | null;
+    callsAtFirstSold: number | null;
+    matchRule: 'new' | 'lead_id' | 'phone';
+  };
+
+  const leadStates = new Map<string, LeadState>();
+
+  for (const vr of validRows) {
+    const viaExternal = vr.externalId ? externalIdMap.get(vr.externalId) ?? null : null;
+    const viaPhone = phoneMap.get(vr.phone) ?? null;
+    const existing = viaExternal ?? viaPhone;
+
+    let state = leadStates.get(vr.phone);
+    if (!state) {
+      state = {
+        id: existing?.id ?? '',
+        isNew: !existing,
+        existing,
+        externalId: vr.externalId,
+        phone: vr.phone,
+        phoneRaw: vr.phoneRaw,
+        leadType: vr.leadType,
+        leadStatus: vr.leadStatus,
+        createdAtStr: vr.createdAtStr,
+        lastCallStr: vr.lastCallStr,
+        vendor: vr.vendor,
+        totalCalls: vr.totalCalls,
+        hasBadPhone: vr.isBadPhone,
+        firstContactDate: existing?.first_contact_date ?? null,
+        firstQuoteDate: existing?.first_quote_date ?? null,
+        firstSoldDate: existing?.first_sold_date ?? null,
+        callsAtFirstQuote: null,
+        callsAtFirstSold: null,
+        matchRule: existing ? (viaExternal ? 'lead_id' : 'phone') : 'new',
+      };
+      leadStates.set(vr.phone, state);
+    } else {
+      // Merge a repeated row for the same phone — take latest status / calls.
+      state.leadStatus = vr.leadStatus;
+      state.leadType = vr.leadType;
+      state.totalCalls = Math.max(state.totalCalls, vr.totalCalls);
+      if (vr.isBadPhone) state.hasBadPhone = true;
+      if (vr.vendor) state.vendor = vr.vendor;
+      if (vr.lastCallStr) state.lastCallStr = vr.lastCallStr;
+      if (vr.externalId && !state.externalId) state.externalId = vr.externalId;
+    }
+
+    // Merge date fields: keep earliest contact/quote/sold that is actually set.
+    if (vr.isContact && vr.firstCallStr) {
+      if (!state.firstContactDate || vr.firstCallStr < state.firstContactDate) {
+        state.firstContactDate = vr.firstCallStr;
+      }
+    }
+    if (vr.isQuote && vr.firstCallStr && !state.existing?.first_quote_date && !state.firstQuoteDate) {
+      state.firstQuoteDate = vr.firstCallStr;
+      state.callsAtFirstQuote = vr.totalCalls;
+    }
+    if (vr.isSold && vr.firstCallStr && !state.existing?.first_sold_date && !state.firstSoldDate) {
+      state.firstSoldDate = vr.firstCallStr;
+      state.callsAtFirstSold = vr.totalCalls;
+    }
+  }
+
+  // ── Phase 3: Batch-insert new leads ─────────────────────────────────────
+  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: validRows.length });
+
+  const newStates = [...leadStates.values()].filter((s) => s.isNew);
+  const INSERT_BATCH = 100;
+  for (let i = 0; i < newStates.length; i += INSERT_BATCH) {
+    const batch = newStates.slice(i, i + INSERT_BATCH);
+    const inserts = batch.map((s) => ({
+      agency_id: agencyId,
+      normalized_phone: s.phone,
+      raw_phone: s.phoneRaw,
+      lead_id_external: s.externalId || null,
+      current_lead_type: s.leadType,
+      current_status: s.leadStatus,
+      first_seen_date: s.createdAtStr,
+      first_deer_dama_date: s.createdAtStr,
+      latest_call_date: s.lastCallStr,
+      latest_vendor_name: s.vendor,
+      total_call_attempts: s.totalCalls,
+      has_bad_phone: s.hasBadPhone,
+      first_contact_date: s.firstContactDate,
+      first_quote_date: s.firstQuoteDate,
+      first_sold_date: s.firstSoldDate,
+      calls_at_first_quote: s.callsAtFirstQuote,
+      calls_at_first_sold: s.callsAtFirstSold,
+    }));
+
+    const { data: created, error: createErr } = await supabase
+      .from('leads')
+      .insert(inserts)
+      .select('id, normalized_phone');
+
+    if (createErr) {
+      errors.push(`New-lead batch error: ${createErr.message}`);
+      continue;
+    }
+
+    for (const row of created ?? []) {
+      const s = leadStates.get(row.normalized_phone);
+      if (s) {
+        s.id = row.id;
+        newLeads++;
+      }
+    }
+  }
+
+  // ── Phase 4: Update existing leads ──────────────────────────────────────
+  onProgress?.({ phase: 'Updating existing leads…', processed: 0, total: validRows.length });
+
+  const toUpdate = [...leadStates.values()].filter((s) => !s.isNew && s.id);
+  for (const s of toUpdate) {
+    const updates: Record<string, unknown> = {
+      current_status: s.leadStatus,
+      current_lead_type: s.leadType,
+      total_call_attempts: s.totalCalls,
+    };
+    if (s.vendor) updates.latest_vendor_name = s.vendor;
+    if (s.externalId) updates.lead_id_external = s.externalId;
+    if (s.lastCallStr) updates.latest_call_date = s.lastCallStr;
+    if (s.hasBadPhone) updates.has_bad_phone = true;
+    if (s.createdAtStr) updates.first_deer_dama_date = s.createdAtStr;
+    if (!s.existing?.first_quote_date && s.firstQuoteDate) {
+      updates.first_quote_date = s.firstQuoteDate;
+      updates.calls_at_first_quote = s.callsAtFirstQuote;
+    }
+    if (!s.existing?.first_sold_date && s.firstSoldDate) {
+      updates.first_sold_date = s.firstSoldDate;
+      updates.calls_at_first_sold = s.callsAtFirstSold;
+    }
+    if (s.firstContactDate && (!s.existing?.first_contact_date || s.firstContactDate < s.existing.first_contact_date)) {
+      updates.first_contact_date = s.firstContactDate;
+    }
+
+    const { error } = await supabase.from('leads').update(updates).eq('id', s.id);
+    if (error) errors.push(`Update lead ${s.id}: ${error.message}`);
+    else updatedLeads++;
+  }
+
+  // ── Phase 5: Resolve staff IDs + batch-insert raw rows & staff history ─
+  onProgress?.({ phase: 'Saving raw rows…', processed: 0, total: validRows.length });
+
+  const uniqueOwners = [...new Set(validRows.map((r) => r.leadOwner).filter(Boolean))];
+  const staffIds = new Map<string, string | null>();
+  for (const owner of uniqueOwners) {
+    staffIds.set(owner, await getOrCreateStaff(owner, agencyId));
+  }
+
+  const rawBatch: Record<string, unknown>[] = [];
+  const historyBatch: Record<string, unknown>[] = [];
+
+  for (const vr of validRows) {
+    const state = leadStates.get(vr.phone);
+    if (!state?.id) {
+      rowsSkipped++;
+      continue;
+    }
+
+    rawBatch.push({
+      upload_id: uploadId,
+      row_number: vr.rowNum,
+      lead_id_external: vr.externalId || null,
+      full_name: vr.fullName,
+      first_name: str(vr.raw['First Name']),
+      last_name: str(vr.raw['Last Name']),
+      email: str(vr.raw['Email']),
+      address: str(vr.raw['Address']),
+      lead_status: vr.leadStatus,
+      lead_owner: vr.leadOwner,
+      created_at_source: vr.createdAtStr,
+      vendor: vr.vendor,
+      first_call_date: vr.firstCallStr,
+      last_call_date: vr.lastCallStr,
+      total_calls: vr.totalCalls,
+      phone_main: vr.phoneRaw,
+      normalized_phone: vr.phone,
+      lead_main_state: str(vr.raw['Lead Main State']),
+      matched_lead_id: state.id,
+      match_rule: state.matchRule,
+      processing_status: 'processed',
+      raw_data: vr.raw,
+    });
+
+    const staffId = vr.leadOwner ? staffIds.get(vr.leadOwner) ?? null : null;
+    if (staffId) {
+      historyBatch.push({
+        lead_id: state.id,
+        staff_id: staffId,
+        source_type: 'deer_dama',
+        source_upload_id: uploadId,
+        first_seen_date: vr.createdAtStr ?? new Date().toISOString().split('T')[0],
+      });
+    }
+
+    rowsImported++;
+  }
+
+  const WRITE_BATCH = 500;
+  for (let i = 0; i < rawBatch.length; i += WRITE_BATCH) {
+    const { error } = await supabase
+      .from('raw_deer_dama_rows')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(rawBatch.slice(i, i + WRITE_BATCH) as any);
+    if (error) errors.push(`raw_deer_dama_rows batch error: ${error.message}`);
+  }
+  for (let i = 0; i < historyBatch.length; i += WRITE_BATCH) {
+    const { error } = await supabase
+      .from('lead_staff_history')
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .insert(historyBatch.slice(i, i + WRITE_BATCH) as any);
+    if (error) errors.push(`lead_staff_history batch error: ${error.message}`);
   }
 
   await supabase

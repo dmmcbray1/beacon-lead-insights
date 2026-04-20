@@ -1,27 +1,62 @@
 import { useState } from 'react';
-import { getSeedStaffPerformance, getSeedKPIs } from '@/lib/seedData';
 import { formatPercent, formatNumber } from '@/lib/metrics';
 import FilterBar from '@/components/FilterBar';
 import KPICard from '@/components/KPICard';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Building2, Users, UserCheck, FileCheck, PhoneIncoming, Target, Percent, TrendingUp } from 'lucide-react';
+import { useAgencies, useKPIs, type Filters } from '@/hooks/useLeadData';
 
-const agencies = [
-  {
-    name: 'McBrayer Agency',
-    leads: 842, contacts: 432, quoted: 148, callbacks: 127,
-    contactRate: 0.513, quoteRate: 0.176, contactToQuoteRate: 0.343, callbackToQuoteRate: 0.307,
-  },
-  {
-    name: 'Summit Insurance Group',
-    leads: 405, contacts: 209, quoted: 70, callbacks: 60,
-    contactRate: 0.516, quoteRate: 0.173, contactToQuoteRate: 0.335, callbackToQuoteRate: 0.283,
-  },
-];
+interface AgencyRowProps {
+  agency: { id: string; name: string };
+  filters: Filters;
+}
+
+function AgencyRow({ agency, filters }: AgencyRowProps) {
+  const { kpis, isLoading } = useKPIs({ ...filters, agency: agency.id });
+
+  return (
+    <div className="mb-8">
+      <div className="flex items-center gap-2 mb-4">
+        <Building2 className="w-5 h-5 text-primary" />
+        <h2 className="text-lg font-semibold text-foreground">{agency.name}</h2>
+      </div>
+
+      {isLoading || !kpis ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="bg-card rounded-lg border p-5">
+              <Skeleton className="h-4 w-20 mb-3" />
+              <Skeleton className="h-7 w-16" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+          <KPICard label="Leads" value={formatNumber(kpis.totalLeads)} icon={Users} color="hsl(215,72%,40%)" />
+          <KPICard label="Contacts" value={formatNumber(kpis.totalContacts)} icon={UserCheck} color="hsl(152,60%,40%)" />
+          <KPICard label="Quoted" value={formatNumber(kpis.totalQuotedHouseholds)} icon={FileCheck} color="hsl(38,92%,50%)" />
+          <KPICard label="Callbacks" value={formatNumber(kpis.totalCallbacks)} icon={PhoneIncoming} color="hsl(270,55%,50%)" />
+          <KPICard label="Contact %" value={formatPercent(kpis.contactRate)} icon={Percent} color="hsl(152,60%,40%)" />
+          <KPICard label="Quote %" value={formatPercent(kpis.quoteRate)} icon={Target} color="hsl(38,92%,50%)" />
+          <KPICard label="C→Q %" value={formatPercent(kpis.contactToQuoteRate)} icon={TrendingUp} color="hsl(215,72%,40%)" />
+          <KPICard label="CB→Q %" value={formatPercent(kpis.callbackToQuoteRate)} icon={TrendingUp} color="hsl(270,55%,50%)" />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function AgencyPerformance() {
-  const [filters, setFilters] = useState({
-    dateRange: '30d', agency: 'all', staff: 'all', leadType: 'all', dateBasis: 'lead_created',
+  const [filters, setFilters] = useState<Filters>({
+    dateRange: '30d',
+    agency: 'all',
+    staff: 'all',
+    leadType: 'all',
+    dateBasis: 'lead_created',
+    vendorFilter: true,
   });
+
+  const { data: agencies, isLoading } = useAgencies();
 
   return (
     <div className="page-container">
@@ -32,23 +67,33 @@ export default function AgencyPerformance() {
 
       <FilterBar filters={filters} onChange={setFilters} />
 
-      {agencies.map(agency => (
-        <div key={agency.name} className="mb-8">
-          <div className="flex items-center gap-2 mb-4">
-            <Building2 className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-semibold text-foreground">{agency.name}</h2>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-            <KPICard label="Leads" value={formatNumber(agency.leads)} icon={Users} color="hsl(215,72%,40%)" />
-            <KPICard label="Contacts" value={formatNumber(agency.contacts)} icon={UserCheck} color="hsl(152,60%,40%)" />
-            <KPICard label="Quoted" value={formatNumber(agency.quoted)} icon={FileCheck} color="hsl(38,92%,50%)" />
-            <KPICard label="Callbacks" value={formatNumber(agency.callbacks)} icon={PhoneIncoming} color="hsl(270,55%,50%)" />
-            <KPICard label="Contact %" value={formatPercent(agency.contactRate)} icon={Percent} color="hsl(152,60%,40%)" />
-            <KPICard label="Quote %" value={formatPercent(agency.quoteRate)} icon={Target} color="hsl(38,92%,50%)" />
-            <KPICard label="C→Q %" value={formatPercent(agency.contactToQuoteRate)} icon={TrendingUp} color="hsl(215,72%,40%)" />
-            <KPICard label="CB→Q %" value={formatPercent(agency.callbackToQuoteRate)} icon={TrendingUp} color="hsl(270,55%,50%)" />
-          </div>
+      {isLoading && (
+        <div className="space-y-8">
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i}>
+              <Skeleton className="h-6 w-48 mb-4" />
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+                {Array.from({ length: 8 }).map((_, j) => (
+                  <div key={j} className="bg-card rounded-lg border p-5">
+                    <Skeleton className="h-4 w-20 mb-3" />
+                    <Skeleton className="h-7 w-16" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
+      )}
+
+      {!isLoading && (agencies ?? []).length === 0 && (
+        <div className="text-center py-16 text-muted-foreground">
+          <p className="text-base font-medium mb-1">No agencies yet</p>
+          <p className="text-sm">Agencies will appear here once they are created in the admin panel.</p>
+        </div>
+      )}
+
+      {!isLoading && (agencies ?? []).map((agency) => (
+        <AgencyRow key={agency.id} agency={agency} filters={filters} />
       ))}
     </div>
   );
