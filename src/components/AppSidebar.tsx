@@ -1,13 +1,22 @@
+import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, Users, Building2, Search,
-  Settings, Phone, LogOut, ShieldCheck
+  Settings, Phone, LogOut, ShieldCheck, Moon, Sun
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
 export default function AppSidebar() {
   const location = useLocation();
   const { user, isAdmin, signOut } = useAuth();
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    return saved ? saved === 'dark' : document.documentElement.classList.contains('dark');
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', isDark);
+  }, [isDark]);
 
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard, adminOnly: false },
@@ -70,10 +79,18 @@ export default function AppSidebar() {
           </div>
         )}
         <button
+          onClick={() => setIsDark((d) => { const next = !d; localStorage.setItem('theme', next ? 'dark' : 'light'); return next; })}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground transition-colors duration-150 w-full"
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {isDark ? <Sun className="w-4 h-4 shrink-0" aria-hidden="true" /> : <Moon className="w-4 h-4 shrink-0" aria-hidden="true" />}
+          {isDark ? 'Light Mode' : 'Dark Mode'}
+        </button>
+        <button
           onClick={signOut}
           className="flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground transition-colors duration-150 w-full"
         >
-          <LogOut className="w-4 h-4 shrink-0" />
+          <LogOut className="w-4 h-4 shrink-0" aria-hidden="true" />
           Sign Out
         </button>
         <p className="px-3 text-[11px] text-sidebar-muted">v1.0 · Beacon Call Dashboard</p>

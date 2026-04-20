@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Navigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 import { CheckCircle2, XCircle, Clock, Building2, ShieldCheck, Users } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -132,8 +133,29 @@ export default function UserManagement() {
       </div>
 
       {loadingData ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="w-6 h-6 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+        <div className="space-y-6">
+          <Skeleton className="h-6 w-48" />
+          <div className="bg-card border rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  {['Email', 'Agency', 'Joined', 'Actions'].map((h) => (
+                    <th key={h} className="text-left px-4 py-3 font-medium text-muted-foreground">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-48" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-5 w-32 rounded" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-4 w-20" /></td>
+                    <td className="px-4 py-3"><Skeleton className="h-8 w-24 rounded-md" /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="space-y-8">

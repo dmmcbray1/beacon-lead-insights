@@ -20,7 +20,7 @@
     --secondary-foreground: 220 25% 15%;
 
     --muted: 220 14% 94%;
-    --muted-foreground: 220 10% 46%;
+    --muted-foreground: 220 10% 40%;
 
     --accent: 38 92% 50%;
     --accent-foreground: 38 95% 14%;
@@ -54,7 +54,53 @@
     --kpi-contacts: 152 60% 40%;
     --kpi-quotes: 38 92% 50%;
     --kpi-callbacks: 270 55% 50%;
+    --kpi-voicemails: 200 70% 44%;
     --kpi-bad: 0 72% 51%;
+  }
+}
+
+@layer base {
+  .dark {
+    --background: 220 20% 9%;
+    --foreground: 220 10% 92%;
+
+    --card: 220 20% 12%;
+    --card-foreground: 220 10% 92%;
+
+    --popover: 220 20% 12%;
+    --popover-foreground: 220 10% 92%;
+
+    --primary: 215 72% 62%;
+    --primary-foreground: 220 20% 9%;
+
+    --secondary: 220 20% 17%;
+    --secondary-foreground: 220 10% 82%;
+
+    --muted: 220 20% 14%;
+    --muted-foreground: 220 10% 58%;
+
+    --accent: 38 92% 55%;
+    --accent-foreground: 38 95% 10%;
+
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 20% 20%;
+    --input: 220 20% 20%;
+    --ring: 215 72% 62%;
+
+    --success: 152 55% 52%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 55%;
+    --warning-foreground: 38 95% 10%;
+
+    --kpi-leads: 215 72% 62%;
+    --kpi-contacts: 152 55% 52%;
+    --kpi-quotes: 38 92% 58%;
+    --kpi-callbacks: 270 55% 68%;
+    --kpi-voicemails: 200 70% 62%;
+    --kpi-bad: 0 72% 62%;
   }
 }
 

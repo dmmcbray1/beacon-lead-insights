@@ -1,52 +1,65 @@
 import { useState } from 'react';
-import { Search, Download, ChevronDown } from 'lucide-react';
+import { Search, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { getSeedLeads } from '@/lib/seedData';
-
-const leads = getSeedLeads();
+import { Skeleton } from '@/components/ui/skeleton';
+import { useLeadList, type Filters } from '@/hooks/useLeadData';
+import { formatPhone } from '@/lib/phone';
 
 export default function LeadExplorer() {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
-  const filtered = leads.filter(l => {
-    const matchesSearch = !search ||
-      l.phone.includes(search) ||
-      (l.lead_id?.toLowerCase().includes(search.toLowerCase())) ||
-      l.staff.toLowerCase().includes(search.toLowerCase());
-    const matchesType = typeFilter === 'all' ||
-      (typeFilter === 'new' && l.lead_type === 'New') ||
-      (typeFilter === 're_quote' && l.lead_type === 'Re-Quote');
-    return matchesSearch && matchesType;
+  const filters: Filters = {
+    dateRange: 'all',
+    agency: 'all',
+    staff: 'all',
+    leadType: typeFilter === 'all' ? 'all' : typeFilter,
+    dateBasis: 'lead_created',
+    vendorFilter: false,
+  };
+
+  const { data: leads, isLoading, error } = useLeadList({ ...filters, search });
+
+  const filtered = (leads ?? []).filter((l) => {
+    if (!search) return true;
+    const s = search.toLowerCase();
+    return (
+      l.phone.includes(search.replace(/\D/g, '')) ||
+      formatPhone(l.phone).includes(search) ||
+      (l.leadIdExternal?.toLowerCase().includes(s) ?? false) ||
+      l.status.toLowerCase().includes(s)
+    );
   });
 
   return (
     <div className="page-container">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight" style={{ lineHeight: 1.2 }}>Lead Explorer</h1>
+          <h1 className="text-2xl font-bold text-foreground tracking-tight" style={{ lineHeight: 1.2 }}>
+            Lead Explorer
+          </h1>
           <p className="text-sm text-muted-foreground mt-1">Search and filter all lead records</p>
         </div>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" disabled>
           <Download className="w-4 h-4 mr-1.5" /> Export CSV
         </Button>
       </div>
 
-      {/* Search + Filters */}
+      {/* Filters */}
       <div className="filter-bar">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
             value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search by phone, Lead ID, or staff..."
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by phone, Lead ID, or status…"
             className="w-full pl-9 pr-3 py-2 text-sm bg-secondary rounded-md border-0 outline-none text-foreground placeholder:text-muted-foreground"
           />
         </div>
         <select
           value={typeFilter}
-          onChange={e => setTypeFilter(e.target.value)}
+          onChange={(e) => setTypeFilter(e.target.value)}
           className="bg-secondary text-secondary-foreground rounded-md px-2.5 py-2 text-sm border-0 outline-none cursor-pointer"
         >
           <option value="all">All Types</option>
@@ -55,49 +68,96 @@ export default function LeadExplorer() {
         </select>
       </div>
 
-      {/* Table */}
-      <div className="bg-card border rounded-lg overflow-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-muted">
-              {['Phone', 'Lead ID', 'Agency', 'Type', 'Status', 'Staff', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'Callbacks', 'Vendor', 'Match'].map(h => (
-                <th key={h} className="px-3 py-2.5 text-left font-medium text-foreground whitespace-nowrap">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(lead => (
-              <tr key={lead.id} className="border-t hover:bg-muted/50 transition-colors cursor-pointer">
-                <td className="px-3 py-2.5 font-medium text-foreground whitespace-nowrap">{lead.phone}</td>
-                <td className="px-3 py-2.5 text-primary font-mono text-xs">{lead.lead_id || '—'}</td>
-                <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.agency}</td>
-                <td className="px-3 py-2.5">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                    lead.lead_type === 'New' ? 'bg-primary/10 text-primary' : 'bg-kpi-callbacks/10 text-kpi-callbacks'
-                  }`}>{lead.lead_type}</span>
-                </td>
-                <td className="px-3 py-2.5 text-muted-foreground text-xs whitespace-nowrap">{lead.status}</td>
-                <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.staff}</td>
-                <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.first_seen}</td>
-                <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.first_contact || '—'}</td>
-                <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.first_quote || '—'}</td>
-                <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.calls}</td>
-                <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.callbacks}</td>
-                <td className="px-3 py-2.5 text-muted-foreground text-xs">{lead.vendor}</td>
-                <td className="px-3 py-2.5">
-                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                    lead.lead_id ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-                  }`}>
-                    {lead.lead_id ? 'ID+Phone' : 'Phone'}
-                  </span>
-                </td>
+      {isLoading && (
+        <div className="bg-card border rounded-lg overflow-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-muted">
+                {['Phone', 'Lead ID', 'Type', 'Status', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'CB', 'Bad?'].map((h) => (
+                  <th key={h} className="px-3 py-2.5 text-left font-medium text-foreground whitespace-nowrap">{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <tr key={i} className="border-t">
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-28" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-32" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-8" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-8" /></td>
+                  <td className="px-3 py-2.5" />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {error && (
+        <div className="py-4 px-4 bg-destructive/10 text-destructive text-sm rounded-lg mb-4">
+          Failed to load leads: {(error as Error).message}
+        </div>
+      )}
 
-      <p className="text-xs text-muted-foreground mt-3">{filtered.length} leads shown</p>
+      {!isLoading && !error && (
+        <>
+          <div className="bg-card border rounded-lg overflow-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-muted">
+                  {['Phone', 'Lead ID', 'Type', 'Status', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'CB', 'Bad?'].map((h) => (
+                    <th key={h} className="px-3 py-2.5 text-left font-medium text-foreground whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground text-sm">
+                      {search ? 'No leads match your search.' : 'No leads yet. Upload a report to get started.'}
+                    </td>
+                  </tr>
+                )}
+                {filtered.map((lead) => (
+                  <tr key={lead.id} className="border-t hover:bg-muted/50 transition-colors">
+                    <td className="px-3 py-2.5 font-medium text-foreground whitespace-nowrap font-mono text-xs">
+                      {formatPhone(lead.phone)}
+                    </td>
+                    <td className="px-3 py-2.5 text-primary font-mono text-xs">
+                      {lead.leadIdExternal || '—'}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                        lead.leadType === 'new_lead' ? 'bg-primary/10 text-primary' : 'bg-kpi-callbacks/10'
+                      }`}>
+                        {lead.leadType === 'new_lead' ? 'New' : 'Re-Quote'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground text-xs whitespace-nowrap max-w-[180px] truncate">
+                      {lead.status || '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstSeen ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstContact ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstQuote ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.calls}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.callbacks}</td>
+                    <td className="px-3 py-2.5">
+                      {lead.isBadPhone && (
+                        <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">Bad</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-muted-foreground mt-3">{filtered.length} leads shown</p>
+        </>
+      )}
     </div>
   );
 }
