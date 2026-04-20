@@ -11,6 +11,7 @@ export const CONTACT_DISPOSITIONS = [
   '2.1 CONTACTED - Not Interested',
   '2.2 CONTACTED - FOLLOW UP',
   '2.4 CONTACTED - Already Purchased',
+  '2.6 CONTACTED - Hung Up',
   '3.0 QUOTED',
   '3.1 QUOTED - HOT!!!!',
   '3.2 QUOTED - Not Interested',
@@ -38,6 +39,11 @@ export const BAD_PHONE_STATUSES = [
   '1.2 CALLED - Bad Phone #',
 ] as const;
 
+// A call counts as a VOICEMAIL if the status matches:
+export const VOICEMAIL_DISPOSITIONS = [
+  '1.4 CALLED - Left Voicemail (List)',
+] as const;
+
 // Re-quote indicator statuses (Current Status values)
 export const REQUOTE_STATUSES = [
   '9.1 REQUOTE',
@@ -46,18 +52,23 @@ export const REQUOTE_STATUSES = [
 /**
  * Vendor/territory filter rules.
  *
- * In the real Daily Call Report, "Beacon Territory" appears inside the
- * Call Type column (e.g. "9.5a: New Home to Beacon Territory : …"),
- * NOT in the Vendor Name column.
+ * "Beacon Territory" may appear in Call Type (e.g. "9.5a: New Home to Beacon Territory : …")
+ * OR in Vendor Name (e.g. "New-Home-to-Beacon-Territory-List-Upload").
+ * Follow-up call types like "Manual dial" / "3.x Assigned: …" are linked to Beacon Territory
+ * solely via vendor name.
+ * The "NEW-HOME-Priority-List" vendor is the Beacon Territory priority subset.
  *
- * Filter logic (applied to Call Type field, case-insensitive substring):
- *   - New lead outbound: Call Type contains "beacon territory"
+ * Filter logic (case-insensitive):
+ *   - New lead outbound: Call Type OR Vendor Name (hyphens → spaces) contains "beacon territory"
+ *                        OR Vendor Name (hyphens → spaces) starts with "new home"
  *   - New lead inbound:  Call Type equals "Inbound Call" or "Inbound IVR"
  *   - Re-quote:          Call Type OR Vendor Name contains "requote"
  */
 export const VENDOR_FILTER_RULES = {
-  /** Substring to find in Call Type for outbound new leads */
+  /** Substring to find in Call Type or normalised Vendor Name for outbound new leads */
   newOutboundSubstring: 'beacon territory',
+  /** Vendor name prefix (hyphens → spaces) that also identifies Beacon Territory leads */
+  beaconVendorPrefix: 'new home',
   /** Exact Call Type values for inbound new leads */
   inboundCallTypes: ['inbound call', 'inbound ivr'],
   /** Substring in Call Type or Vendor Name for re-quote leads */
@@ -110,8 +121,7 @@ export const DAILY_CALL_COLUMNS = [
 export const DEER_DAMA_COLUMNS = [
   'Lead ID', 'Full Name', 'Lead Main State', 'Lead Status',
   'Lead Owner', 'Created At', 'Vendor', 'Last Status Date',
-  'First Name', 'Last Name', 'Email', 'Phone - Main',
-  'Address', '2nd Driver First Name', '2nd Driver\'s Last Name',
+  'Email', 'Phone - Main',
   'First Call Date', 'Last Call Date', 'Total Calls',
 ];
 

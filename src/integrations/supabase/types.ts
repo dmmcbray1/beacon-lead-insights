@@ -50,6 +50,7 @@ export type Database = {
           is_callback: boolean | null
           is_contact: boolean | null
           is_quote: boolean | null
+          is_voicemail: boolean | null
           lead_id: string
           source_raw_row_id: string | null
           source_upload_id: string | null
@@ -70,6 +71,7 @@ export type Database = {
           is_callback?: boolean | null
           is_contact?: boolean | null
           is_quote?: boolean | null
+          is_voicemail?: boolean | null
           lead_id: string
           source_raw_row_id?: string | null
           source_upload_id?: string | null
@@ -90,6 +92,7 @@ export type Database = {
           is_callback?: boolean | null
           is_contact?: boolean | null
           is_quote?: boolean | null
+          is_voicemail?: boolean | null
           lead_id?: string
           source_raw_row_id?: string | null
           source_upload_id?: string | null
@@ -389,6 +392,7 @@ export type Database = {
           raw_phone: string | null
           total_call_attempts: number | null
           total_callbacks: number | null
+          total_voicemails: number | null
           updated_at: string
         }
         Insert: {
@@ -417,6 +421,7 @@ export type Database = {
           raw_phone?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
+          total_voicemails?: number | null
           updated_at?: string
         }
         Update: {
@@ -445,6 +450,7 @@ export type Database = {
           raw_phone?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
+          total_voicemails?: number | null
           updated_at?: string
         }
         Relationships: [

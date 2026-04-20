@@ -29,6 +29,8 @@ export interface LeadRecord {
   /** Total Calls from Deer Dama, captured when lead first reaches sold status */
   calls_at_first_sold: number | null;
   has_bad_phone: boolean;
+  latest_call_date: string | null;
+  total_voicemails: number;
   statuses: string[];
   /** The Call Type value from Daily Call Report (contains campaign/territory info) */
   call_type: string | null;
@@ -142,15 +144,32 @@ export interface LeadTypeBreakdown {
   quoteRate: number;
   contactToQuoteRate: number;
   callbacks: number;
+  callbacksQuoted: number;
   callbackToQuoteRate: number;
   avgCallsToQuote: number;
   avgDaysToQuote: number;
+  avgDaysContactToQuote: number;
+  singleTouchQuotePct: number;
+  sold: number;
+  quotedToSoldRate: number;
   avgDaysToSoldFromSeen: number;
   avgDaysToSoldFromContact: number;
   avgDaysQuoteToSold: number;
   avgCallsQuoteToSold: number;
+  noContactCount: number;
+  noContactRate: number;
+  stalePipelineCount: number;
   badPhoneCount: number;
   badPhoneRate: number;
+  /** Leads where at least one voicemail was left */
+  voicemailLeads: number;
+  voicemailRate: number;
+  /** Leads with voicemail left AND a callback received */
+  voicemailCallbacks: number;
+  /** Leads with NO voicemail that still called back */
+  nonVoicemailCallbacks: number;
+  voicemailCallbackToQuoteRate: number;
+  nonVoicemailCallbackToQuoteRate: number;
 }
 
 export interface KPIData {
@@ -159,14 +178,28 @@ export interface KPIData {
   reQuoteLeads: number;
   totalContacts: number;
   totalQuotedHouseholds: number;
+  totalSold: number;
   totalCallbacks: number;
+  totalCallbacksQuoted: number;
+  totalNoContact: number;
+  totalStalePipeline: number;
   badPhoneCount: number;
+  totalVoicemailLeads: number;
+  totalVoicemailCallbacks: number;
+  totalNonVoicemailCallbacks: number;
+  voicemailLeadRate: number;
+  voicemailCallbackToQuoteRate: number;
+  nonVoicemailCallbackToQuoteRate: number;
   contactRate: number;
   quoteRate: number;
+  quotedToSoldRate: number;
   contactToQuoteRate: number;
   callbackToQuoteRate: number;
+  noContactRate: number;
   avgCallsToQuote: number;
   avgDaysToQuote: number;
+  avgDaysContactToQuote: number;
+  singleTouchQuotePct: number;
   avgDaysToSoldFromSeen: number;
   avgDaysToSoldFromContact: number;
   avgDaysQuoteToSold: number;
@@ -197,8 +230,8 @@ function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
   const quoteRate = calcRate(quoted, total);
   const contactedAndQuoted = contactedLeads.filter(l => isQuoted(l.statuses)).length;
   const contactToQuoteRate = calcRate(contactedAndQuoted, contacts);
-  const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
-  const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
+  const callbacksQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
+  const callbackToQuoteRate = calcRate(callbacksQuoted, callbackLeads.length);
 
   const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
   const avgCallsToQuote = quotedWithCalls.length > 0
@@ -214,7 +247,38 @@ function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
       }, 0) / quotedWithDates.length
     : 0;
 
+  // Contact → Quote days
+  const contactedAndQuotedWithDates = quotedLeads.filter(l => l.first_contact_date && l.first_quote_date);
+  const avgDaysContactToQuote = contactedAndQuotedWithDates.length > 0
+    ? contactedAndQuotedWithDates.reduce((sum, l) => {
+        return sum + Math.max(0, (new Date(l.first_quote_date!).getTime() - new Date(l.first_contact_date!).getTime()) / 86400000);
+      }, 0) / contactedAndQuotedWithDates.length
+    : 0;
+
+  // Single-touch quote % (only leads where calls_at_first_quote is known)
+  const quotedWithCallSnapshot = quotedLeads.filter(l => l.calls_at_first_quote != null);
+  const singleTouchQuotePct = calcRate(
+    quotedWithCallSnapshot.filter(l => l.calls_at_first_quote === 1).length,
+    quotedWithCallSnapshot.length,
+  );
+
+  // No-contact: leads that were called but never reached
+  const calledLeads = leads.filter(l => l.total_call_attempts > 0);
+  const noContactCount = calledLeads.filter(l => !isContacted(l)).length;
+  const noContactRate = calcRate(noContactCount, calledLeads.length);
+
+  // Stale pipeline: called but not updated in 7+ days, not sold, not bad phone
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const stalePipelineCount = leads.filter(l => {
+    if (isSold(l.statuses) || l.has_bad_phone) return false;
+    if (!l.latest_call_date || l.total_call_attempts === 0) return false;
+    return l.latest_call_date < sevenDaysAgo;
+  }).length;
+
   const soldLeads = leads.filter(l => isSold(l.statuses));
+  const sold = soldLeads.length;
+  const quotedToSoldRate = calcRate(sold, quoted);
+
   const soldSeen = soldLeads.filter(l => l.first_seen_date && l.first_sold_date);
   const avgDaysToSoldFromSeen = soldSeen.length > 0
     ? soldSeen.reduce((sum, l) => sum + Math.max(0, (new Date(l.first_sold_date!).getTime() - new Date(l.first_seen_date!).getTime()) / 86400000), 0) / soldSeen.length
@@ -235,14 +299,36 @@ function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
     ? soldCalls.reduce((sum, l) => sum + Math.max(0, l.calls_at_first_sold! - l.calls_at_first_quote!), 0) / soldCalls.length
     : 0;
 
+  // Voicemail metrics
+  const voicemailLeadsList = leads.filter(l => l.total_voicemails > 0);
+  const voicemailLeads = voicemailLeadsList.length;
+  const voicemailRate = calcRate(voicemailLeads, total);
+  const voicemailCallbacks = voicemailLeadsList.filter(l => l.total_callbacks > 0).length;
+  const nonVoicemailCallbacks = leads.filter(l => l.total_voicemails === 0 && l.total_callbacks > 0).length;
+  const voicemailCallbackLeads = voicemailLeadsList.filter(l => l.total_callbacks > 0);
+  const voicemailCallbackToQuoteRate = calcRate(
+    voicemailCallbackLeads.filter(l => isQuoted(l.statuses)).length,
+    voicemailCallbackLeads.length,
+  );
+  const nonVoicemailCallbackLeads = leads.filter(l => l.total_voicemails === 0 && l.total_callbacks > 0);
+  const nonVoicemailCallbackToQuoteRate = calcRate(
+    nonVoicemailCallbackLeads.filter(l => isQuoted(l.statuses)).length,
+    nonVoicemailCallbackLeads.length,
+  );
+
   return {
     leads: total, contacts, contactRate, quoted, quoteRate,
-    contactToQuoteRate, callbacks, callbackToQuoteRate,
-    avgCallsToQuote, avgDaysToQuote,
+    contactToQuoteRate, callbacks, callbacksQuoted, callbackToQuoteRate,
+    avgCallsToQuote, avgDaysToQuote, avgDaysContactToQuote, singleTouchQuotePct,
+    sold, quotedToSoldRate,
     avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
     avgDaysQuoteToSold, avgCallsQuoteToSold,
+    noContactCount, noContactRate, stalePipelineCount,
     badPhoneCount: badPhone,
     badPhoneRate: calcRate(badPhone, total),
+    voicemailLeads, voicemailRate,
+    voicemailCallbacks, nonVoicemailCallbacks,
+    voicemailCallbackToQuoteRate, nonVoicemailCallbackToQuoteRate,
   };
 }
 
@@ -271,8 +357,8 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
   const contactToQuoteRate = calcRate(contactedAndQuoted, totalContacts);
 
   const callbackLeads = filtered.filter(l => l.total_callbacks > 0);
-  const callbackQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
-  const callbackToQuoteRate = calcRate(callbackQuoted, callbackLeads.length);
+  const totalCallbacksQuoted = callbackLeads.filter(l => isQuoted(l.statuses)).length;
+  const callbackToQuoteRate = calcRate(totalCallbacksQuoted, callbackLeads.length);
 
   const quotedWithCalls = quotedLeads.filter(l => (l.calls_at_first_quote ?? l.total_call_attempts) > 0);
   const avgCallsToQuote = quotedWithCalls.length > 0
@@ -325,6 +411,50 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
       ) / soldWithCallSnapshots.length
     : 0;
 
+  // New metrics
+  const totalSold = soldLeads.length;
+  const quotedToSoldRate = calcRate(totalSold, totalQuotedHouseholds);
+
+  const calledLeads = filtered.filter(l => l.total_call_attempts > 0);
+  const totalNoContact = calledLeads.filter(l => !isContacted(l)).length;
+  const noContactRate = calcRate(totalNoContact, calledLeads.length);
+
+  const contactedAndQuotedWithDates = quotedLeads.filter(l => l.first_contact_date && l.first_quote_date);
+  const avgDaysContactToQuote = contactedAndQuotedWithDates.length > 0
+    ? contactedAndQuotedWithDates.reduce((sum, l) => {
+        return sum + Math.max(0, (new Date(l.first_quote_date!).getTime() - new Date(l.first_contact_date!).getTime()) / 86400000);
+      }, 0) / contactedAndQuotedWithDates.length
+    : 0;
+
+  const quotedWithCallSnapshot = quotedLeads.filter(l => l.calls_at_first_quote != null);
+  const singleTouchQuotePct = calcRate(
+    quotedWithCallSnapshot.filter(l => l.calls_at_first_quote === 1).length,
+    quotedWithCallSnapshot.length,
+  );
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const totalStalePipeline = filtered.filter(l => {
+    if (isSold(l.statuses) || l.has_bad_phone) return false;
+    if (!l.latest_call_date || l.total_call_attempts === 0) return false;
+    return l.latest_call_date < sevenDaysAgo;
+  }).length;
+
+  // Voicemail totals
+  const totalVoicemailLeads = filtered.filter(l => l.total_voicemails > 0).length;
+  const voicemailLeadRate = calcRate(totalVoicemailLeads, totalLeads);
+  const vmCallbackLeads = filtered.filter(l => l.total_voicemails > 0 && l.total_callbacks > 0);
+  const totalVoicemailCallbacks = vmCallbackLeads.length;
+  const totalNonVoicemailCallbacks = filtered.filter(l => l.total_voicemails === 0 && l.total_callbacks > 0).length;
+  const voicemailCallbackToQuoteRate = calcRate(
+    vmCallbackLeads.filter(l => isQuoted(l.statuses)).length,
+    vmCallbackLeads.length,
+  );
+  const nonVmCallbackLeads = filtered.filter(l => l.total_voicemails === 0 && l.total_callbacks > 0);
+  const nonVoicemailCallbackToQuoteRate = calcRate(
+    nonVmCallbackLeads.filter(l => isQuoted(l.statuses)).length,
+    nonVmCallbackLeads.length,
+  );
+
   // Bad phone breakdowns
   const badPhoneNewCount = newLeadsList.filter(l => l.has_bad_phone).length;
   const badPhoneReQuoteCount = reQuoteLeadsList.filter(l => l.has_bad_phone).length;
@@ -338,11 +468,14 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
 
   return {
     totalLeads, newLeads, reQuoteLeads,
-    totalContacts, totalQuotedHouseholds, totalCallbacks, badPhoneCount,
-    contactRate, quoteRate, contactToQuoteRate, callbackToQuoteRate,
-    avgCallsToQuote, avgDaysToQuote, avgDaysToSoldFromSeen, avgDaysToSoldFromContact,
-    avgDaysQuoteToSold, avgCallsQuoteToSold,
+    totalContacts, totalQuotedHouseholds, totalSold, totalCallbacks, totalCallbacksQuoted,
+    totalNoContact, totalStalePipeline, badPhoneCount,
+    contactRate, quoteRate, quotedToSoldRate, contactToQuoteRate, callbackToQuoteRate,
+    noContactRate, avgCallsToQuote, avgDaysToQuote, avgDaysContactToQuote, singleTouchQuotePct,
+    avgDaysToSoldFromSeen, avgDaysToSoldFromContact, avgDaysQuoteToSold, avgCallsQuoteToSold,
     badPhoneRate, badPhoneNewCount, badPhoneNewRate, badPhoneReQuoteCount, badPhoneReQuoteRate,
+    totalVoicemailLeads, totalVoicemailCallbacks, totalNonVoicemailCallbacks,
+    voicemailLeadRate, voicemailCallbackToQuoteRate, nonVoicemailCallbackToQuoteRate,
     newBreakdown, reQuoteBreakdown,
   };
 }
