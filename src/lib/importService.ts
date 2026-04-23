@@ -1176,3 +1176,24 @@ export async function importDeerDamaReport(
     errors: errors.slice(0, 20),
   };
 }
+
+/**
+ * Delete a single upload row. Cascade FKs wipe all derived rows
+ * (call_events, status_events, lead_identity_links, lead_staff_history,
+ * quote_events, callback_events) and the raw_*_rows staging tables.
+ *
+ * Throws on RLS denial or network error.
+ */
+export async function deleteUpload(uploadId: string): Promise<void> {
+  const { error } = await supabase.from('uploads').delete().eq('id', uploadId);
+  if (error) throw new Error('Failed to delete upload: ' + error.message);
+}
+
+/**
+ * Delete both uploads in a batch in one query. Used by the Upload Center
+ * trash button and by importBatch's rollback path.
+ */
+export async function deleteBatch(batchId: string): Promise<void> {
+  const { error } = await supabase.from('uploads').delete().eq('batch_id', batchId);
+  if (error) throw new Error('Failed to delete upload batch: ' + error.message);
+}
