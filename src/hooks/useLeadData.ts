@@ -549,7 +549,7 @@ export function useUploadHistory() {
     queryFn: async () => {
       let q = supabase
         .from('uploads')
-        .select('id, file_name, report_type, upload_date, row_count, matched_count, status, notes, agency_id, created_at')
+        .select('id, file_name, report_type, upload_date, row_count, matched_count, status, notes, agency_id, created_at, batch_id')
         .order('created_at', { ascending: false })
         .limit(30);
 

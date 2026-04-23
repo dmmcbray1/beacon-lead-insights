@@ -21,6 +21,7 @@ import {
   BatchRollbackError,
 } from '@/lib/importService';
 import BatchDropSlot, { type BatchDropSlotValue } from '@/components/upload/BatchDropSlot';
+import UploadHistoryRow, { type UploadRow } from '@/components/upload/UploadHistoryRow';
 import { useUploadHistory } from '@/hooks/useLeadData';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -49,9 +50,25 @@ const initialState: BatchState = {
 };
 
 export default function UploadCenter() {
-  const { agencyId } = useAuth();
+  const { agencyId, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const uploadHistory = useUploadHistory();
+
+  const historyRows = (uploadHistory.data ?? []) as UploadRow[];
+  const grouped: Array<{ batchId: string | null; rows: UploadRow[] }> = [];
+  const seen = new Set<string>();
+  for (const row of historyRows) {
+    if (row.batch_id) {
+      if (seen.has(row.batch_id)) continue;
+      seen.add(row.batch_id);
+      grouped.push({
+        batchId: row.batch_id,
+        rows: historyRows.filter((r) => r.batch_id === row.batch_id),
+      });
+    } else {
+      grouped.push({ batchId: null, rows: [row] });
+    }
+  }
 
   const [state, setState] = useState<BatchState>(initialState);
   const [duplicatePrompt, setDuplicatePrompt] = useState<BatchResult['duplicateOf'] | null>(null);
@@ -393,6 +410,7 @@ export default function UploadCenter() {
                   {['File', 'Type', 'Date', 'Rows', 'Imported', 'Status'].map((h) => (
                     <th key={h} className="px-4 py-2.5 text-left font-medium text-foreground">{h}</th>
                   ))}
+                  <th className="px-4 py-2.5 w-10" aria-hidden="true" />
                 </tr>
               </thead>
               <tbody>
@@ -404,30 +422,19 @@ export default function UploadCenter() {
                     <td className="px-4 py-2.5"><Skeleton className="h-4 w-12" /></td>
                     <td className="px-4 py-2.5"><Skeleton className="h-4 w-12" /></td>
                     <td className="px-4 py-2.5"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                    <td className="px-4 py-2.5" />
                   </tr>
                 ))}
-                {!uploadHistory.isLoading && (uploadHistory.data ?? []).length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground text-sm">No uploads yet</td></tr>
+                {!uploadHistory.isLoading && grouped.length === 0 && (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No uploads yet</td></tr>
                 )}
-                {(uploadHistory.data ?? []).map((row) => (
-                  <tr key={row.id} className="border-t hover:bg-muted/50 transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-foreground max-w-[200px] truncate">{row.file_name}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">
-                      {row.report_type === REPORT_TYPES.DAILY_CALL ? 'Daily Call' : 'Deer Dama'}
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{row.upload_date}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{row.row_count ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{row.matched_count ?? '—'}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                        row.status === 'complete' ? 'bg-success/10 text-success' :
-                        row.status === 'complete_with_errors' ? 'bg-warning/10 text-warning' :
-                        'bg-muted text-muted-foreground'
-                      }`}>
-                        {row.status === 'complete_with_errors' ? 'Errors' : row.status}
-                      </span>
-                    </td>
-                  </tr>
+                {grouped.map((group) => (
+                  <UploadHistoryRow
+                    key={group.batchId ?? group.rows[0].id}
+                    batchId={group.batchId}
+                    rows={group.rows}
+                    isAdmin={isAdmin}
+                  />
                 ))}
               </tbody>
             </table>
