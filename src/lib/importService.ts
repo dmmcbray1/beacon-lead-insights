@@ -1260,6 +1260,11 @@ export async function importBatch(
     }
   }
 
+  // Per-importer force is always true: importBatch owns the dup-check decision
+  // above. Forwarding the caller's `force` would re-hash and re-check, and would
+  // trigger duplicate errors after the caller already overrode them.
+  const perFileForce = true;
+
   // Phase 1: Daily Call
   const dailyCall = await importDailyCallReport(
     dailyCallFile,
@@ -1267,17 +1272,18 @@ export async function importBatch(
     uploadDate,
     notes,
     (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
-    force,
+    perFileForce,
     batchId,
   );
 
   if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
     // Daily Call failed outright. Wipe its uploads row (and any derived rows)
     // via batch_id so no orphaned record remains.
-    await safeRollback(batchId);
+    const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
       'daily_call',
       new Error(dailyCall.errors.join('; ')),
+      rollbackErr ?? undefined,
     );
   }
 
@@ -1290,7 +1296,7 @@ export async function importBatch(
       uploadDate,
       notes,
       (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
-      force,
+      perFileForce,
       batchId,
     );
   } catch (err) {
