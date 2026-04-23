@@ -10,6 +10,12 @@
 import * as XLSX from 'xlsx';
 import { supabase } from '@/integrations/supabase/client';
 import { normalizePhone } from './phone';
+import type {
+  RicochetMatch,
+  RicochetWriteSummary,
+  RicochetDecision,
+} from './importRicochet';
+import type { RicochetRow, RicochetRowParseError } from './ricochetParser';
 import {
   CONTACT_DISPOSITIONS,
   QUOTE_DISPOSITIONS,
@@ -35,6 +41,7 @@ export interface ImportResult {
   rowsImported: number;
   rowsFiltered: number;
   rowsSkipped: number;
+  rowsSkippedUnmatched?: number;
   newLeads: number;
   updatedLeads: number;
   errors: string[];
@@ -61,6 +68,7 @@ export interface BatchProgress {
 
 export interface BatchResult {
   batchId: string;
+  ricochet?: RicochetWriteSummary;
   dailyCall: ImportResult;
   deerDama: ImportResult;
   rolledBack: boolean;
@@ -89,6 +97,27 @@ export class BatchRollbackError extends Error {
     this.name = 'BatchRollbackError';
   }
 }
+
+export type RequoteDecision = RicochetDecision;
+
+export interface ParsedBatchState {
+  ricochetFile: File;
+  ricochetRows: RicochetRow[];
+  ricochetParseErrors: RicochetRowParseError[];
+  existingMatches: RicochetMatch[];
+  dailyCallFile: File;
+  deerDamaFile: File;
+}
+
+export type ImportBatchResult =
+  | { status: 'success'; result: BatchResult }
+  | { status: 'duplicate'; duplicateOf: NonNullable<BatchResult['duplicateOf']> }
+  | {
+      status: 'needs_requote_review';
+      pendingBatchId: string;
+      matches: RicochetMatch[];
+      parsedState: ParsedBatchState;
+    };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
