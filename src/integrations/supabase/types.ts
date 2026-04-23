@@ -879,6 +879,7 @@ export type Database = {
       uploads: {
         Row: {
           agency_id: string
+          batch_id: string | null
           created_at: string
           error_count: number | null
           file_name: string
@@ -894,6 +895,7 @@ export type Database = {
         }
         Insert: {
           agency_id: string
+          batch_id?: string | null
           created_at?: string
           error_count?: number | null
           file_name: string
@@ -909,6 +911,7 @@ export type Database = {
         }
         Update: {
           agency_id?: string
+          batch_id?: string | null
           created_at?: string
           error_count?: number | null
           file_name?: string

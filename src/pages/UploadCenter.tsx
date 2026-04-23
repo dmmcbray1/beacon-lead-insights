@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { useState } from 'react';
+import { CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -13,127 +13,122 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { useQueryClient } from '@tanstack/react-query';
-import { REPORT_TYPES, DAILY_CALL_COLUMNS, DEER_DAMA_COLUMNS } from '@/lib/constants';
-import { importDailyCallReport, importDeerDamaReport, parseFile, type ImportProgress, type ImportResult } from '@/lib/importService';
+import { REPORT_TYPES } from '@/lib/constants';
+import {
+  importBatch,
+  type BatchProgress,
+  type BatchResult,
+  BatchRollbackError,
+} from '@/lib/importService';
+import BatchDropSlot, { type BatchDropSlotValue } from '@/components/upload/BatchDropSlot';
+import UploadHistoryRow, { type UploadRow } from '@/components/upload/UploadHistoryRow';
 import { useUploadHistory } from '@/hooks/useLeadData';
 import { useAuth } from '@/hooks/useAuth';
 
 type Step = 'select' | 'preview' | 'importing' | 'summary';
 
-interface UploadState {
-  file: File | null;
-  reportType: string;
+interface BatchState {
+  dailyCall: BatchDropSlotValue | null;
+  deerDama: BatchDropSlotValue | null;
   uploadDate: string;
   notes: string;
-  columns: string[];
-  previewRows: Record<string, string>[];
   step: Step;
-  progress: ImportProgress | null;
-  result: ImportResult | null;
+  progress: BatchProgress | null;
+  result: BatchResult | null;
+  rollbackMessage: string | null;
 }
 
-const initialState: UploadState = {
-  file: null,
-  reportType: '',
+const initialState: BatchState = {
+  dailyCall: null,
+  deerDama: null,
   uploadDate: new Date().toISOString().split('T')[0],
   notes: '',
-  columns: [],
-  previewRows: [],
   step: 'select',
   progress: null,
   result: null,
+  rollbackMessage: null,
 };
 
-function detectReportType(columns: string[]): string {
-  const colSet = new Set(columns.map((c) => c.toLowerCase().trim()));
-  const dailyMatch = DAILY_CALL_COLUMNS.filter((c) => colSet.has(c.toLowerCase())).length;
-  const deerMatch = DEER_DAMA_COLUMNS.filter((c) => colSet.has(c.toLowerCase())).length;
-  if (deerMatch > dailyMatch && deerMatch >= 5) return REPORT_TYPES.DEER_DAMA;
-  if (dailyMatch >= 5) return REPORT_TYPES.DAILY_CALL;
-  return '';
-}
-
 export default function UploadCenter() {
-  const { agencyId } = useAuth();
+  const { agencyId, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   const uploadHistory = useUploadHistory();
 
-  const [state, setState] = useState<UploadState>(initialState);
-  const [dragOver, setDragOver] = useState(false);
-  const [duplicatePrompt, setDuplicatePrompt] = useState<ImportResult['duplicateOf'] | null>(null);
-
-  const handleFile = useCallback(async (file: File) => {
-    try {
-      const rows = await parseFile(file);
-      const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-      const previewRows = rows.slice(0, 5).map((r) =>
-        Object.fromEntries(Object.entries(r).map(([k, v]) => [k, String(v ?? '')])),
-      ) as Record<string, string>[];
-      const detectedType = detectReportType(columns);
-      setState((prev) => ({
-        ...prev,
-        file,
-        columns,
-        previewRows,
-        reportType: detectedType || prev.reportType,
-        step: 'preview',
-      }));
-    } catch (err) {
-      setState((prev) => ({
-        ...prev,
-        result: {
-          uploadId: '', rowsTotal: 0, rowsImported: 0, rowsFiltered: 0,
-          rowsSkipped: 0, newLeads: 0, updatedLeads: 0,
-          errors: ['Could not read file: ' + String(err)],
-        },
-        step: 'summary',
-      }));
+  const historyRows = (uploadHistory.data ?? []) as UploadRow[];
+  const grouped: Array<{ batchId: string | null; rows: UploadRow[] }> = [];
+  const seen = new Set<string>();
+  for (const row of historyRows) {
+    if (row.batch_id) {
+      if (seen.has(row.batch_id)) continue;
+      seen.add(row.batch_id);
+      grouped.push({
+        batchId: row.batch_id,
+        rows: historyRows.filter((r) => r.batch_id === row.batch_id),
+      });
+    } else {
+      grouped.push({ batchId: null, rows: [row] });
     }
-  }, []);
+  }
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
+  const [state, setState] = useState<BatchState>(initialState);
+  const [duplicatePrompt, setDuplicatePrompt] = useState<BatchResult['duplicateOf'] | null>(null);
 
-  const runImport = async (force: boolean) => {
-    if (!state.file || !state.reportType || !agencyId) return;
+  const runBatch = async (force: boolean) => {
+    if (!state.dailyCall || !state.deerDama || !agencyId) return;
+    setState((prev) => ({ ...prev, step: 'importing', progress: null, rollbackMessage: null }));
 
-    setState((prev) => ({ ...prev, step: 'importing', progress: null }));
-
-    const onProgress = (p: ImportProgress) => {
+    const onProgress = (p: BatchProgress) => {
       setState((prev) => ({ ...prev, progress: p }));
     };
 
-    const fn =
-      state.reportType === REPORT_TYPES.DAILY_CALL
-        ? importDailyCallReport
-        : importDeerDamaReport;
+    try {
+      const result = await importBatch(
+        state.dailyCall.file,
+        state.deerDama.file,
+        agencyId,
+        state.uploadDate,
+        state.notes,
+        onProgress,
+        force,
+      );
 
-    const result = await fn(state.file, agencyId, state.uploadDate, state.notes, onProgress, force);
+      if (result.duplicateOf && !force) {
+        setDuplicatePrompt(result.duplicateOf);
+        setState((prev) => ({ ...prev, step: 'preview', progress: null }));
+        return;
+      }
 
-    if (result.duplicateOf && !force) {
-      // Return to preview and surface the confirm dialog. No data was written.
-      setDuplicatePrompt(result.duplicateOf);
-      setState((prev) => ({ ...prev, step: 'preview', progress: null }));
-      return;
+      await queryClient.invalidateQueries({ queryKey: ['leads'] });
+      await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
+      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+      await queryClient.invalidateQueries({ queryKey: ['leadList'] });
+
+      setState((prev) => ({ ...prev, step: 'summary', result }));
+    } catch (err) {
+      const message =
+        err instanceof BatchRollbackError
+          ? err.message
+          : 'Batch import failed: ' + String(err);
+      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+      setState((prev) => ({
+        ...prev,
+        step: 'summary',
+        rollbackMessage: message,
+        result: {
+          batchId: '',
+          dailyCall: { uploadId: '', rowsTotal: 0, rowsImported: 0, rowsFiltered: 0, rowsSkipped: 0, newLeads: 0, updatedLeads: 0, errors: [] },
+          deerDama: { uploadId: '', rowsTotal: 0, rowsImported: 0, rowsFiltered: 0, rowsSkipped: 0, newLeads: 0, updatedLeads: 0, errors: [] },
+          rolledBack: true,
+        },
+      }));
     }
-
-    await queryClient.invalidateQueries({ queryKey: ['leads'] });
-    await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
-    await queryClient.invalidateQueries({ queryKey: ['uploads'] });
-    await queryClient.invalidateQueries({ queryKey: ['leadList'] });
-
-    setState((prev) => ({ ...prev, step: 'summary', result }));
   };
 
-  const handleImport = () => runImport(false);
+  const handleImport = () => runBatch(false);
 
   const handleDuplicateConfirm = () => {
     setDuplicatePrompt(null);
-    runImport(true);
+    void runBatch(true);
   };
 
   const handleDuplicateCancel = () => setDuplicatePrompt(null);
@@ -142,9 +137,6 @@ export default function UploadCenter() {
     setDuplicatePrompt(null);
     setState(initialState);
   };
-
-  const reportLabel = (type: string) =>
-    type === REPORT_TYPES.DAILY_CALL ? 'Daily Call Report' : type === REPORT_TYPES.DEER_DAMA ? 'Deer Dama (Lead) Report' : 'Unknown';
 
   return (
     <div className="page-container">
@@ -157,22 +149,10 @@ export default function UploadCenter() {
         </p>
       </div>
 
-      {/* ── Step: Select File ─────────────────────────────────────────────── */}
+      {/* ── Step: Select Files ────────────────────────────────────────────── */}
       {state.step === 'select' && (
-        <div className="max-w-2xl">
+        <div className="max-w-3xl">
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1.5 block">Report Type</label>
-              <select
-                value={state.reportType}
-                onChange={(e) => setState((prev) => ({ ...prev, reportType: e.target.value }))}
-                className="w-full bg-card border rounded-md px-3 py-2 text-sm"
-              >
-                <option value="">Auto-detect or select…</option>
-                <option value={REPORT_TYPES.DAILY_CALL}>Daily Call Report</option>
-                <option value={REPORT_TYPES.DEER_DAMA}>Deer Dama (Lead) Report</option>
-              </select>
-            </div>
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">Upload Date</label>
               <input
@@ -182,102 +162,111 @@ export default function UploadCenter() {
                 className="w-full bg-card border rounded-md px-3 py-2 text-sm"
               />
             </div>
-            <div className="col-span-2">
+            <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">Notes (optional)</label>
               <input
                 type="text"
                 value={state.notes}
                 onChange={(e) => setState((prev) => ({ ...prev, notes: e.target.value }))}
-                placeholder="e.g. Morning batch, Mar 24"
+                placeholder="e.g. Morning batch, Apr 23"
                 className="w-full bg-card border rounded-md px-3 py-2 text-sm"
               />
             </div>
           </div>
 
-          <div
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-lg p-12 text-center transition-colors duration-200 ${
-              dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/40'
-            }`}
-          >
-            <Upload className="w-10 h-10 mx-auto mb-3 text-muted-foreground" />
-            <p className="text-sm font-medium text-foreground mb-1">Drop your CSV or Excel file here</p>
-            <p className="text-xs text-muted-foreground mb-4">Supports .csv, .xlsx, .xls</p>
-            <label>
-              <input
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-              />
-              <Button variant="outline" size="sm" asChild><span>Browse Files</span></Button>
-            </label>
+          <div className="grid grid-cols-2 gap-4">
+            <BatchDropSlot
+              expectedType={REPORT_TYPES.DAILY_CALL}
+              label="Daily Call Report"
+              value={state.dailyCall}
+              onChange={(v) => setState((prev) => ({ ...prev, dailyCall: v }))}
+            />
+            <BatchDropSlot
+              expectedType={REPORT_TYPES.DEER_DAMA}
+              label="Deer Dama (Lead) Report"
+              value={state.deerDama}
+              onChange={(v) => setState((prev) => ({ ...prev, deerDama: v }))}
+            />
+          </div>
+
+          {!agencyId && (
+            <div className="flex items-center gap-2 mt-4 px-3 py-2 bg-destructive/10 rounded-md">
+              <AlertTriangle className="w-4 h-4 text-destructive" />
+              <span className="text-sm text-destructive">No agency assigned to your account. Contact your administrator.</span>
+            </div>
+          )}
+
+          <div className="mt-6 flex justify-end">
+            <Button
+              onClick={() => setState((prev) => ({ ...prev, step: 'preview' }))}
+              disabled={
+                !state.dailyCall ||
+                !state.deerDama ||
+                !state.dailyCall.typeMatches ||
+                !state.deerDama.typeMatches ||
+                !state.uploadDate
+              }
+            >
+              Continue to Preview
+            </Button>
           </div>
         </div>
       )}
 
       {/* ── Step: Preview ─────────────────────────────────────────────────── */}
       {state.step === 'preview' && (
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            <FileSpreadsheet className="w-5 h-5 text-primary" />
-            <div>
-              <p className="text-sm font-medium text-foreground">{state.file?.name}</p>
-              <p className="text-xs text-muted-foreground">
-                {state.columns.length} columns · {state.previewRows.length} preview rows
-                {state.reportType ? ` · ${reportLabel(state.reportType)}` : ''}
-              </p>
-            </div>
-          </div>
-
-          {state.reportType ? (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-success/10 rounded-md">
-              <CheckCircle2 className="w-4 h-4 text-success" />
-              <span className="text-sm text-success">Auto-detected as {reportLabel(state.reportType)}</span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-warning/10 rounded-md">
-              <AlertTriangle className="w-4 h-4 text-warning" />
-              <span className="text-sm text-warning-foreground">Could not auto-detect — please select the report type above.</span>
-            </div>
-          )}
+        <div className="max-w-4xl space-y-8">
+          {(['dailyCall', 'deerDama'] as const).map((key) => {
+            const slot = state[key];
+            if (!slot) return null;
+            const label = key === 'dailyCall' ? 'Daily Call Report' : 'Deer Dama (Lead) Report';
+            return (
+              <div key={key}>
+                <h2 className="text-base font-semibold text-foreground mb-2">{label}</h2>
+                <p className="text-xs text-muted-foreground mb-3">
+                  {slot.file.name} — {slot.columns.length} columns
+                </p>
+                <div className="border rounded-md overflow-auto max-h-[240px]">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted">
+                      <tr>
+                        {slot.columns.map((c) => (
+                          <th key={c} className="px-3 py-2 text-left font-medium text-muted-foreground whitespace-nowrap">
+                            {c}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {slot.previewRows.map((row, i) => (
+                        <tr key={i} className="border-t">
+                          {slot.columns.map((c) => (
+                            <td key={c} className="px-3 py-1.5 text-foreground whitespace-nowrap max-w-[200px] truncate">
+                              {row[c] || '—'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
 
           {!agencyId && (
-            <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-destructive/10 rounded-md">
+            <div className="flex items-center gap-2 px-3 py-2 bg-destructive/10 rounded-md">
               <AlertTriangle className="w-4 h-4 text-destructive" />
               <span className="text-sm text-destructive">No agency assigned to your account. Contact your administrator.</span>
             </div>
           )}
 
-          <div className="border rounded-lg overflow-auto mb-6">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-muted">
-                  {state.columns.map((col) => (
-                    <th key={col} className="px-3 py-2 text-left font-medium text-foreground whitespace-nowrap">{col}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {state.previewRows.map((row, i) => (
-                  <tr key={i} className="border-t">
-                    {state.columns.map((col) => (
-                      <td key={col} className="px-3 py-2 text-muted-foreground whitespace-nowrap max-w-[200px] truncate">
-                        {row[col] || '—'}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex gap-3">
-            <Button variant="outline" onClick={reset}>Cancel</Button>
-            <Button onClick={handleImport} disabled={!state.reportType || !agencyId}>
-              Import File
+          <div className="flex justify-between pt-4">
+            <Button variant="outline" onClick={() => setState((prev) => ({ ...prev, step: 'select' }))}>
+              Back
+            </Button>
+            <Button onClick={handleImport} disabled={!agencyId}>
+              Import Batch
             </Button>
           </div>
         </div>
@@ -285,95 +274,127 @@ export default function UploadCenter() {
 
       {/* ── Step: Importing ───────────────────────────────────────────────── */}
       {state.step === 'importing' && (
-        <div className="max-w-md mx-auto text-center py-16">
-          <Loader2 className="w-12 h-12 mx-auto mb-4 text-primary animate-spin" />
-          <p className="text-sm font-medium text-foreground">
-            {state.progress?.phase ?? 'Preparing import…'}
-          </p>
-          {state.progress && state.progress.total > 0 && (
-            <>
-              <p className="text-xs text-muted-foreground mt-1">
-                {state.progress.processed} / {state.progress.total} rows
+        <div className="max-w-2xl">
+          <div className="flex items-center gap-3 mb-4">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Importing batch
+                {state.progress && ` — file ${state.progress.fileIndex} of 2`}
               </p>
-              <div className="mt-3 h-2 bg-secondary rounded-full overflow-hidden max-w-xs mx-auto">
-                <div
-                  className="h-full bg-primary rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, (state.progress.processed / state.progress.total) * 100)}%` }}
-                />
-              </div>
-            </>
-          )}
+              <p className="text-xs text-muted-foreground">
+                {state.progress
+                  ? `${state.progress.currentFile === 'daily_call' ? 'Daily Call' : 'Deer Dama'}: ${state.progress.phase} (${state.progress.processed}/${state.progress.total})`
+                  : 'Starting…'}
+              </p>
+            </div>
+          </div>
+          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all"
+              style={{
+                width: state.progress
+                  ? `${Math.min(100, ((state.progress.fileIndex - 1) * 50) + ((state.progress.processed / Math.max(1, state.progress.total)) * 50))}%`
+                  : '0%',
+              }}
+            />
+          </div>
         </div>
       )}
 
       {/* ── Step: Summary ─────────────────────────────────────────────────── */}
-      {state.step === 'summary' && state.result && (
-        <div className="max-w-lg">
-          <div className="flex items-center gap-3 mb-6">
-            {state.result.errors.length === 0 ? (
-              <CheckCircle2 className="w-8 h-8 text-success" />
-            ) : (
-              <AlertTriangle className="w-8 h-8 text-warning" />
-            )}
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Import Complete</h2>
-              <p className="text-sm text-muted-foreground">{state.file?.name}</p>
-            </div>
-          </div>
-
-          <div className="bg-card border rounded-lg p-5 space-y-3 mb-6">
-            {[
-              ['Total Rows in File', state.result.rowsTotal],
-              ['Rows Imported', state.result.rowsImported],
-              ['Rows Filtered (non-Beacon Territory)', state.result.rowsFiltered],
-              ['Rows Skipped (invalid phone / errors)', state.result.rowsSkipped],
-              ['New Leads Created', state.result.newLeads],
-              ['Existing Leads Updated', state.result.updatedLeads],
-            ].map(([label, val]) => (
-              <div key={String(label)} className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">{label}</span>
-                <span className="font-medium text-foreground tabular-nums">{val}</span>
+      {state.step === 'summary' && (
+        <div className="max-w-3xl">
+          {state.rollbackMessage ? (
+            <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 mb-6">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-destructive">Batch rolled back</p>
+                  <p className="text-xs text-destructive/80 mt-1">{state.rollbackMessage}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    No data was imported. Fix the issue and try again.
+                  </p>
+                </div>
               </div>
-            ))}
-          </div>
-
-          {state.result.errors.length > 0 && (
-            <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-4 mb-6">
-              <p className="text-sm font-medium text-destructive mb-2">
-                {state.result.errors.length} error(s)
-              </p>
-              <ul className="space-y-1">
-                {state.result.errors.map((e, i) => (
-                  <li key={i} className="text-xs text-muted-foreground">{e}</li>
-                ))}
-              </ul>
+            </div>
+          ) : (
+            <div className="rounded-md border border-success/50 bg-success/10 p-4 mb-6">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-success" />
+                <p className="text-sm font-medium text-success">Batch imported successfully</p>
+              </div>
             </div>
           )}
 
-          <div className="flex gap-3">
-            <Button onClick={reset}>Upload Another File</Button>
+          {state.result && !state.rollbackMessage && (
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              {(['dailyCall', 'deerDama'] as const).map((key) => {
+                const r = state.result![key];
+                const title = key === 'dailyCall' ? 'Daily Call Report' : 'Deer Dama (Lead) Report';
+                return (
+                  <div key={key} className="border rounded-md p-4 bg-card">
+                    <p className="text-sm font-medium text-foreground mb-2">{title}</p>
+                    <dl className="grid grid-cols-2 gap-1 text-xs">
+                      <dt className="text-muted-foreground">Rows imported</dt>
+                      <dd className="text-right tabular-nums">{r.rowsImported}</dd>
+                      <dt className="text-muted-foreground">Filtered</dt>
+                      <dd className="text-right tabular-nums">{r.rowsFiltered}</dd>
+                      <dt className="text-muted-foreground">Skipped</dt>
+                      <dd className="text-right tabular-nums">{r.rowsSkipped}</dd>
+                      <dt className="text-muted-foreground">New leads</dt>
+                      <dd className="text-right tabular-nums">{r.newLeads}</dd>
+                      <dt className="text-muted-foreground">Updated leads</dt>
+                      <dd className="text-right tabular-nums">{r.updatedLeads}</dd>
+                    </dl>
+                    {r.errors.length > 0 && (
+                      <details className="mt-2 text-xs">
+                        <summary className="text-warning cursor-pointer">{r.errors.length} warnings</summary>
+                        <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                          {r.errors.slice(0, 20).map((e, i) => (
+                            <li key={i}>{e}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button onClick={reset}>Upload another batch</Button>
           </div>
         </div>
       )}
 
       {/* ── Duplicate-import confirmation ─────────────────────────────────── */}
-      <AlertDialog open={duplicatePrompt !== null} onOpenChange={(o) => { if (!o) handleDuplicateCancel(); }}>
+      <AlertDialog open={!!duplicatePrompt} onOpenChange={(open) => !open && handleDuplicateCancel()}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>This file was already uploaded</AlertDialogTitle>
-            <AlertDialogDescription>
-              {duplicatePrompt && (
-                <>
-                  An identical file (<span className="font-medium">{duplicatePrompt.fileName}</span>)
-                  was uploaded on <span className="font-medium">{duplicatePrompt.uploadDate}</span>.
-                  Re-importing will likely double-count the rows. Import anyway?
-                </>
-              )}
+            <AlertDialogTitle>Duplicate file detected</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2">
+                {duplicatePrompt?.dailyCall && (
+                  <p>
+                    The Daily Call file matches a previous import:{' '}
+                    <strong>{duplicatePrompt.dailyCall.fileName}</strong> ({duplicatePrompt.dailyCall.uploadDate}).
+                  </p>
+                )}
+                {duplicatePrompt?.deerDama && (
+                  <p>
+                    The Deer Dama file matches a previous import:{' '}
+                    <strong>{duplicatePrompt.deerDama.fileName}</strong> ({duplicatePrompt.deerDama.uploadDate}).
+                  </p>
+                )}
+                <p>Import anyway?</p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={handleDuplicateCancel}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDuplicateConfirm}>Import anyway</AlertDialogAction>
+            <AlertDialogAction onClick={handleDuplicateConfirm}>Import Anyway</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -389,6 +410,7 @@ export default function UploadCenter() {
                   {['File', 'Type', 'Date', 'Rows', 'Imported', 'Status'].map((h) => (
                     <th key={h} className="px-4 py-2.5 text-left font-medium text-foreground">{h}</th>
                   ))}
+                  <th className="px-4 py-2.5 w-10" aria-hidden="true" />
                 </tr>
               </thead>
               <tbody>
@@ -400,30 +422,19 @@ export default function UploadCenter() {
                     <td className="px-4 py-2.5"><Skeleton className="h-4 w-12" /></td>
                     <td className="px-4 py-2.5"><Skeleton className="h-4 w-12" /></td>
                     <td className="px-4 py-2.5"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                    <td className="px-4 py-2.5" />
                   </tr>
                 ))}
-                {!uploadHistory.isLoading && (uploadHistory.data ?? []).length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground text-sm">No uploads yet</td></tr>
+                {!uploadHistory.isLoading && grouped.length === 0 && (
+                  <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">No uploads yet</td></tr>
                 )}
-                {(uploadHistory.data ?? []).map((row) => (
-                  <tr key={row.id} className="border-t hover:bg-muted/50 transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-foreground max-w-[200px] truncate">{row.file_name}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">
-                      {row.report_type === REPORT_TYPES.DAILY_CALL ? 'Daily Call' : 'Deer Dama'}
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{row.upload_date}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{row.row_count ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{row.matched_count ?? '—'}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                        row.status === 'complete' ? 'bg-success/10 text-success' :
-                        row.status === 'complete_with_errors' ? 'bg-warning/10 text-warning' :
-                        'bg-muted text-muted-foreground'
-                      }`}>
-                        {row.status === 'complete_with_errors' ? 'Errors' : row.status}
-                      </span>
-                    </td>
-                  </tr>
+                {grouped.map((group) => (
+                  <UploadHistoryRow
+                    key={group.batchId ?? group.rows[0].id}
+                    batchId={group.batchId}
+                    rows={group.rows}
+                    isAdmin={isAdmin}
+                  />
                 ))}
               </tbody>
             </table>

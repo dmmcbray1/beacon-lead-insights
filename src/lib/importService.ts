@@ -51,6 +51,45 @@ export interface ImportResult {
   };
 }
 
+export interface BatchProgress {
+  currentFile: 'daily_call' | 'deer_dama';
+  fileIndex: 1 | 2;
+  phase: string;
+  processed: number;
+  total: number;
+}
+
+export interface BatchResult {
+  batchId: string;
+  dailyCall: ImportResult;
+  deerDama: ImportResult;
+  rolledBack: boolean;
+  rollbackError?: string;
+  /**
+   * Populated when either file is a duplicate of a previously-imported file
+   * and `force` was false. When set, no rows were imported for either file —
+   * the caller should prompt the user and re-invoke importBatch with force: true.
+   */
+  duplicateOf?: {
+    dailyCall?: { uploadId: string; fileName: string; uploadDate: string };
+    deerDama?: { uploadId: string; fileName: string; uploadDate: string };
+  };
+}
+
+export class BatchRollbackError extends Error {
+  constructor(
+    public readonly failedFile: 'daily_call' | 'deer_dama',
+    public readonly originalError: Error,
+    public readonly rollbackError?: Error,
+  ) {
+    super(
+      `Batch failed on ${failedFile}: ${originalError.message}` +
+        (rollbackError ? ` (rollback also failed: ${rollbackError.message})` : ''),
+    );
+    this.name = 'BatchRollbackError';
+  }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Compute the SHA-256 hex digest of a file's raw bytes. */
@@ -279,6 +318,7 @@ export async function importDailyCallReport(
   notes: string,
   onProgress?: (p: ImportProgress) => void,
   force = false,
+  batchId: string | null = null,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -322,6 +362,7 @@ export async function importDailyCallReport(
       // Store hash only on the first (non-forced) import so override re-imports
       // remain permitted under the partial unique index.
       file_hash: force ? null : fileHash,
+      batch_id: batchId,
     })
     .select('id')
     .single();
@@ -745,6 +786,7 @@ export async function importDeerDamaReport(
   notes: string,
   onProgress?: (p: ImportProgress) => void,
   force = false,
+  batchId: string | null = null,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -785,6 +827,7 @@ export async function importDeerDamaReport(
       status: 'processing',
       row_count: rows.length,
       file_hash: force ? null : fileHash,
+      batch_id: batchId,
     })
     .select('id')
     .single();
@@ -1175,4 +1218,149 @@ export async function importDeerDamaReport(
     updatedLeads,
     errors: errors.slice(0, 20),
   };
+}
+
+/**
+ * Import a Daily Call Report and a Deer Dama (Lead) Report as an atomic batch.
+ * Both uploads share a batch_id. If the second importer fails, the first
+ * upload is cascade-deleted so no half-imported state remains.
+ */
+export async function importBatch(
+  dailyCallFile: File,
+  deerDamaFile: File,
+  agencyId: string,
+  uploadDate: string,
+  notes: string,
+  onProgress: (p: BatchProgress) => void,
+  force: boolean,
+): Promise<BatchResult> {
+  const batchId = crypto.randomUUID();
+
+  // Duplicate check both files BEFORE any write so we can prompt once.
+  if (!force) {
+    const [dailyHash, deerHash] = await Promise.all([
+      computeFileHash(dailyCallFile),
+      computeFileHash(deerDamaFile),
+    ]);
+    const [dailyDupe, deerDupe] = await Promise.all([
+      findDuplicateUpload(dailyHash, agencyId),
+      findDuplicateUpload(deerHash, agencyId),
+    ]);
+    if (dailyDupe || deerDupe) {
+      return {
+        batchId,
+        dailyCall: emptyResult(),
+        deerDama: emptyResult(),
+        rolledBack: false,
+        duplicateOf: {
+          dailyCall: dailyDupe ?? undefined,
+          deerDama: deerDupe ?? undefined,
+        },
+      };
+    }
+  }
+
+  // Forward the caller's `force` to per-importers so that file_hash is written
+  // correctly: hashed when force=false (preserves future dedup detection), null
+  // when force=true (the user overrode). The per-importers will re-check for
+  // duplicates, which is redundant when importBatch already checked above, but
+  // the redundant check returns the same result and writing the hash matters.
+
+  // Phase 1: Daily Call
+  const dailyCall = await importDailyCallReport(
+    dailyCallFile,
+    agencyId,
+    uploadDate,
+    notes,
+    (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
+    force,
+    batchId,
+  );
+
+  if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
+    // Daily Call failed outright. Wipe its uploads row (and any derived rows)
+    // via batch_id so no orphaned record remains.
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'daily_call',
+      new Error(dailyCall.errors.join('; ')),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  // Phase 2: Deer Dama
+  let deerDama: ImportResult;
+  try {
+    deerDama = await importDeerDamaReport(
+      deerDamaFile,
+      agencyId,
+      uploadDate,
+      notes,
+      (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
+      force,
+      batchId,
+    );
+  } catch (err) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'deer_dama',
+      err instanceof Error ? err : new Error(String(err)),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'deer_dama',
+      new Error(deerDama.errors.join('; ')),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  return { batchId, dailyCall, deerDama, rolledBack: false };
+}
+
+/** Fire-and-forget rollback; returns the error (if any) without throwing. */
+async function safeRollback(batchId: string): Promise<Error | null> {
+  try {
+    await deleteBatch(batchId);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+function emptyResult(): ImportResult {
+  return {
+    uploadId: '',
+    rowsTotal: 0,
+    rowsImported: 0,
+    rowsFiltered: 0,
+    rowsSkipped: 0,
+    newLeads: 0,
+    updatedLeads: 0,
+    errors: [],
+  };
+}
+
+/**
+ * Delete a single upload row. Cascade FKs wipe all derived rows
+ * (call_events, status_events, lead_identity_links, lead_staff_history,
+ * quote_events, callback_events) and the raw_*_rows staging tables.
+ *
+ * Throws on RLS denial or network error.
+ */
+export async function deleteUpload(uploadId: string): Promise<void> {
+  const { error } = await supabase.from('uploads').delete().eq('id', uploadId);
+  if (error) throw new Error('Failed to delete upload: ' + error.message);
+}
+
+/**
+ * Delete both uploads in a batch in one query. Used by the Upload Center
+ * trash button and by importBatch's rollback path.
+ */
+export async function deleteBatch(batchId: string): Promise<void> {
+  const { error } = await supabase.from('uploads').delete().eq('batch_id', batchId);
+  if (error) throw new Error('Failed to delete upload batch: ' + error.message);
 }
