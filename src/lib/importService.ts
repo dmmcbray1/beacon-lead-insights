@@ -15,6 +15,11 @@ import type {
   RicochetWriteSummary,
   RicochetDecision,
 } from './importRicochet';
+import {
+  parseRicochetFile,
+  detectRicochetMatches,
+  writeRicochetPhase,
+} from './importRicochet';
 import type { RicochetRow, RicochetRowParseError } from './ricochetParser';
 import {
   CONTACT_DISPOSITIONS,
@@ -70,8 +75,8 @@ export interface ImportResult {
 }
 
 export interface BatchProgress {
-  currentFile: 'daily_call' | 'deer_dama';
-  fileIndex: 1 | 2;
+  currentFile: 'ricochet' | 'daily_call' | 'deer_dama';
+  fileIndex: 0 | 1 | 2;
   phase: string;
   processed: number;
   total: number;
@@ -85,11 +90,12 @@ export interface BatchResult {
   rolledBack: boolean;
   rollbackError?: string;
   /**
-   * Populated when either file is a duplicate of a previously-imported file
-   * and `force` was false. When set, no rows were imported for either file —
+   * Populated when any file is a duplicate of a previously-imported file
+   * and `force` was false. When set, no rows were imported for any file —
    * the caller should prompt the user and re-invoke importBatch with force: true.
    */
   duplicateOf?: {
+    ricochet?: { uploadId: string; fileName: string; uploadDate: string };
     dailyCall?: { uploadId: string; fileName: string; uploadDate: string };
     deerDama?: { uploadId: string; fileName: string; uploadDate: string };
   };
@@ -97,7 +103,7 @@ export interface BatchResult {
 
 export class BatchRollbackError extends Error {
   constructor(
-    public readonly failedFile: 'daily_call' | 'deer_dama',
+    public readonly failedFile: 'ricochet' | 'daily_call' | 'deer_dama',
     public readonly originalError: Error,
     public readonly rollbackError?: Error,
   ) {
@@ -1370,34 +1376,65 @@ export async function importDeerDamaReport(
  * Both uploads share a batch_id. If the second importer fails, the first
  * upload is cascade-deleted so no half-imported state remains.
  */
-export async function importBatch(
-  dailyCallFile: File,
-  deerDamaFile: File,
-  agencyId: string,
-  uploadDate: string,
-  notes: string,
-  onProgress: (p: BatchProgress) => void,
-  force: boolean,
-): Promise<BatchResult> {
+/**
+ * Orchestrate a three-phase batch import: Ricochet (Phase 0), Daily Call
+ * (Phase 1), and Deer Dama (Phase 2). Runs Phase 0 parse + match detection
+ * up front and pauses with `status: 'needs_requote_review'` if any incoming
+ * Ricochet rows match existing leads — the caller must then collect user
+ * decisions and invoke `resumeBatch` to commit.
+ *
+ * When no matches exist (or `force: true` is irrelevant to matches), runs
+ * straight through to completion.
+ *
+ * Returns a discriminated union:
+ *   - `{ status: 'success', result }`           — all three phases committed
+ *   - `{ status: 'duplicate', duplicateOf }`    — one or more file hashes
+ *                                                 collide with a prior upload
+ *                                                 (no writes occurred)
+ *   - `{ status: 'needs_requote_review', … }`   — Phase 0 detected existing
+ *                                                 matches; caller must resume
+ *                                                 (no writes occurred)
+ */
+export async function importBatch(params: {
+  ricochetFile: File;
+  dailyCallFile: File;
+  deerDamaFile: File;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}): Promise<ImportBatchResult> {
+  const {
+    ricochetFile,
+    dailyCallFile,
+    deerDamaFile,
+    agencyId,
+    uploadDate,
+    notes,
+    onProgress,
+    force,
+  } = params;
+
   const batchId = crypto.randomUUID();
 
-  // Duplicate check both files BEFORE any write so we can prompt once.
+  // Duplicate check all three files BEFORE any write so we can prompt once.
   if (!force) {
-    const [dailyHash, deerHash] = await Promise.all([
+    const [ricoHash, dailyHash, deerHash] = await Promise.all([
+      computeFileHash(ricochetFile),
       computeFileHash(dailyCallFile),
       computeFileHash(deerDamaFile),
     ]);
-    const [dailyDupe, deerDupe] = await Promise.all([
+    const [ricoDupe, dailyDupe, deerDupe] = await Promise.all([
+      findDuplicateUpload(ricoHash, agencyId),
       findDuplicateUpload(dailyHash, agencyId),
       findDuplicateUpload(deerHash, agencyId),
     ]);
-    if (dailyDupe || deerDupe) {
+    if (ricoDupe || dailyDupe || deerDupe) {
       return {
-        batchId,
-        dailyCall: emptyResult(),
-        deerDama: emptyResult(),
-        rolledBack: false,
+        status: 'duplicate',
         duplicateOf: {
+          ricochet: ricoDupe ?? undefined,
           dailyCall: dailyDupe ?? undefined,
           deerDama: deerDupe ?? undefined,
         },
@@ -1405,35 +1442,211 @@ export async function importBatch(
     }
   }
 
-  // Forward the caller's `force` to per-importers so that file_hash is written
-  // correctly: hashed when force=false (preserves future dedup detection), null
-  // when force=true (the user overrode). The per-importers will re-check for
-  // duplicates, which is redundant when importBatch already checked above, but
-  // the redundant check returns the same result and writing the hash matters.
+  // ---------- Phase 0 (read-only): parse Ricochet + detect matches ----------
+  onProgress({
+    currentFile: 'ricochet',
+    fileIndex: 0,
+    phase: 'Parsing Ricochet file…',
+    processed: 0,
+    total: 0,
+  });
 
-  // Phase 1: Daily Call
-  const dailyCall = await importDailyCallReport(
-    dailyCallFile,
+  const parsed = await parseRicochetFile(ricochetFile);
+
+  onProgress({
+    currentFile: 'ricochet',
+    fileIndex: 0,
+    phase: 'Detecting existing leads…',
+    processed: 0,
+    total: parsed.rows.length,
+  });
+
+  const matches = await detectRicochetMatches(parsed.rows, agencyId);
+
+  if (matches.length > 0) {
+    // Pause for interactive requote review. No DB writes have happened.
+    return {
+      status: 'needs_requote_review',
+      pendingBatchId: batchId,
+      matches,
+      parsedState: {
+        ricochetFile,
+        ricochetRows: parsed.rows,
+        ricochetParseErrors: parsed.errors,
+        existingMatches: matches,
+        dailyCallFile,
+        deerDamaFile,
+      },
+    };
+  }
+
+  // No matches — default every row to a "new lead" write and commit straight
+  // through.
+  return finalizeBatch({
+    batchId,
     agencyId,
     uploadDate,
     notes,
-    (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
+    ricochetFile,
+    parsedRicochet: parsed,
+    existingMatches: [],
+    decisions: new Map(),
+    dailyCallFile,
+    deerDamaFile,
+    onProgress,
     force,
-    batchId,
-  );
+  });
+}
 
-  if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
-    // Daily Call failed outright. Wipe its uploads row (and any derived rows)
-    // via batch_id so no orphaned record remains.
+/**
+ * Shared commit path for both the straight-through and the post-review
+ * (resumeBatch) cases. Performs Phase 0 writes, then Phase 1 (Daily Call),
+ * then Phase 2 (Deer Dama). Any failure triggers a full `safeRollback` via
+ * the shared `batchId`, which cascades through every uploads row (including
+ * the Ricochet uploads row inserted here).
+ */
+interface FinalizeParams {
+  batchId: string;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  ricochetFile: File;
+  parsedRicochet: { rows: RicochetRow[]; errors: RicochetRowParseError[] };
+  existingMatches: RicochetMatch[];
+  decisions: Map<string, RicochetDecision>;
+  dailyCallFile: File;
+  deerDamaFile: File;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}
+
+async function finalizeBatch(p: FinalizeParams): Promise<ImportBatchResult> {
+  const {
+    batchId,
+    agencyId,
+    uploadDate,
+    notes,
+    ricochetFile,
+    parsedRicochet,
+    existingMatches,
+    decisions,
+    dailyCallFile,
+    deerDamaFile,
+    onProgress,
+    force,
+  } = p;
+
+  // ---------- Phase 0: Ricochet ----------
+  let ricochetSummary: RicochetWriteSummary;
+  try {
+    onProgress({
+      currentFile: 'ricochet',
+      fileIndex: 0,
+      phase: 'Writing Ricochet rows…',
+      processed: 0,
+      total: parsedRicochet.rows.length,
+    });
+
+    // The orchestrator creates the uploads row for Ricochet (unlike DC/DD,
+    // which create their own) because writeRicochetPhase expects uploadId
+    // pre-set for its raw_ricochet_rows inserts.
+    const ricoHash = await computeFileHash(ricochetFile);
+    const { data: upRow, error: upErr } = await supabase
+      .from('uploads')
+      .insert({
+        agency_id: agencyId,
+        file_name: ricochetFile.name,
+        report_type: REPORT_TYPES.RICOCHET_LEAD_LIST,
+        upload_date: uploadDate,
+        notes,
+        status: 'processing',
+        row_count: parsedRicochet.rows.length,
+        // Match DC/DD pattern: store hash only when not forcing; `force=true`
+        // means the user overrode and we leave hash null so subsequent
+        // imports of the same file aren't flagged.
+        file_hash: force ? null : ricoHash,
+        batch_id: batchId,
+      })
+      .select('id')
+      .single();
+    if (upErr || !upRow) {
+      throw new Error(
+        'Failed to create Ricochet upload record: ' +
+          (upErr?.message ?? 'unknown error'),
+      );
+    }
+    const ricochetUploadId = upRow.id as string;
+
+    const matchMap = new Map<string, RicochetMatch['existing']>(
+      existingMatches.map((m) => [m.incoming.phoneNormalized, m.existing]),
+    );
+
+    ricochetSummary = await writeRicochetPhase({
+      uploadId: ricochetUploadId,
+      batchId,
+      agencyId,
+      rows: parsedRicochet.rows,
+      existingMatches: matchMap,
+      decisions,
+      parseErrors: parsedRicochet.errors,
+    });
+
+    await supabase
+      .from('uploads')
+      .update({
+        status:
+          ricochetSummary.errors.length > 0 ? 'complete_with_errors' : 'complete',
+        matched_count: ricochetSummary.rowsUpdated,
+        unmatched_count: ricochetSummary.rowsImported,
+        error_count: ricochetSummary.errors.length,
+      })
+      .eq('id', ricochetUploadId);
+  } catch (err) {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
-      'daily_call',
-      new Error(dailyCall.errors.join('; ')),
+      'ricochet',
+      err instanceof Error ? err : new Error(String(err)),
       rollbackErr ?? undefined,
     );
   }
 
-  // Phase 2: Deer Dama
+  // ---------- Phase 1: Daily Call ----------
+  // The hash check was already done in importBatch, so force=true here keeps
+  // the per-importer from re-flagging the duplicate (its fallback still runs
+  // but returns a no-op). However, per DC/DD semantics, `force=true` causes
+  // them to write `file_hash: null`. To preserve future dedup detection we
+  // pass the caller's original `force` — the per-importer's redundant dup
+  // check will be a no-op since the prior duplicate was already rejected in
+  // importBatch.
+  let dailyCall: ImportResult;
+  try {
+    dailyCall = await importDailyCallReport(
+      dailyCallFile,
+      agencyId,
+      uploadDate,
+      notes,
+      (pg) =>
+        onProgress({
+          currentFile: 'daily_call',
+          fileIndex: 1,
+          ...pg,
+        }),
+      force,
+      batchId,
+    );
+    if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
+      throw new Error(dailyCall.errors.join('; '));
+    }
+  } catch (err) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'daily_call',
+      err instanceof Error ? err : new Error(String(err)),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  // ---------- Phase 2: Deer Dama ----------
   let deerDama: ImportResult;
   try {
     deerDama = await importDeerDamaReport(
@@ -1441,10 +1654,18 @@ export async function importBatch(
       agencyId,
       uploadDate,
       notes,
-      (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
+      (pg) =>
+        onProgress({
+          currentFile: 'deer_dama',
+          fileIndex: 2,
+          ...pg,
+        }),
       force,
       batchId,
     );
+    if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
+      throw new Error(deerDama.errors.join('; '));
+    }
   } catch (err) {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
@@ -1454,16 +1675,62 @@ export async function importBatch(
     );
   }
 
-  if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
-    const rollbackErr = await safeRollback(batchId);
-    throw new BatchRollbackError(
-      'deer_dama',
-      new Error(deerDama.errors.join('; ')),
-      rollbackErr ?? undefined,
-    );
-  }
+  return {
+    status: 'success',
+    result: {
+      batchId,
+      ricochet: ricochetSummary,
+      dailyCall,
+      deerDama,
+      rolledBack: false,
+    },
+  };
+}
 
-  return { batchId, dailyCall, deerDama, rolledBack: false };
+/**
+ * Resume a paused batch after the user has reviewed requote matches and
+ * chosen 'requote' or 'overwrite' for each. Uses the same `pendingBatchId`
+ * issued by the initial `importBatch` call so rollback and duplicate-hash
+ * semantics stay consistent.
+ */
+export async function resumeBatch(params: {
+  pendingBatchId: string;
+  decisions: Map<string, RicochetDecision>;
+  parsedState: ParsedBatchState;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}): Promise<ImportBatchResult> {
+  const {
+    pendingBatchId,
+    decisions,
+    parsedState,
+    agencyId,
+    uploadDate,
+    notes,
+    onProgress,
+    force,
+  } = params;
+
+  return finalizeBatch({
+    batchId: pendingBatchId,
+    agencyId,
+    uploadDate,
+    notes,
+    ricochetFile: parsedState.ricochetFile,
+    parsedRicochet: {
+      rows: parsedState.ricochetRows,
+      errors: parsedState.ricochetParseErrors,
+    },
+    existingMatches: parsedState.existingMatches,
+    decisions,
+    dailyCallFile: parsedState.dailyCallFile,
+    deerDamaFile: parsedState.deerDamaFile,
+    onProgress,
+    force,
+  });
 }
 
 /** Fire-and-forget rollback; returns the error (if any) without throwing. */
@@ -1474,19 +1741,6 @@ async function safeRollback(batchId: string): Promise<Error | null> {
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));
   }
-}
-
-function emptyResult(): ImportResult {
-  return {
-    uploadId: '',
-    rowsTotal: 0,
-    rowsImported: 0,
-    rowsFiltered: 0,
-    rowsSkipped: 0,
-    newLeads: 0,
-    updatedLeads: 0,
-    errors: [],
-  };
 }
 
 /**
