@@ -3,14 +3,14 @@
 --    Drop and re-add each FK with cascade so deleting an upload wipes its
 --    stats rows automatically.
 
-ALTER TABLE public.lead_identities
-  DROP CONSTRAINT IF EXISTS lead_identities_source_upload_id_fkey,
-  ADD CONSTRAINT lead_identities_source_upload_id_fkey
+ALTER TABLE public.lead_identity_links
+  DROP CONSTRAINT IF EXISTS lead_identity_links_source_upload_id_fkey,
+  ADD CONSTRAINT lead_identity_links_source_upload_id_fkey
     FOREIGN KEY (source_upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
 
-ALTER TABLE public.lead_staff_assignments
-  DROP CONSTRAINT IF EXISTS lead_staff_assignments_source_upload_id_fkey,
-  ADD CONSTRAINT lead_staff_assignments_source_upload_id_fkey
+ALTER TABLE public.lead_staff_history
+  DROP CONSTRAINT IF EXISTS lead_staff_history_source_upload_id_fkey,
+  ADD CONSTRAINT lead_staff_history_source_upload_id_fkey
     FOREIGN KEY (source_upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
 
 ALTER TABLE public.call_events
@@ -18,9 +18,9 @@ ALTER TABLE public.call_events
   ADD CONSTRAINT call_events_source_upload_id_fkey
     FOREIGN KEY (source_upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
 
-ALTER TABLE public.lead_status_events
-  DROP CONSTRAINT IF EXISTS lead_status_events_source_upload_id_fkey,
-  ADD CONSTRAINT lead_status_events_source_upload_id_fkey
+ALTER TABLE public.status_events
+  DROP CONSTRAINT IF EXISTS status_events_source_upload_id_fkey,
+  ADD CONSTRAINT status_events_source_upload_id_fkey
     FOREIGN KEY (source_upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
 
 ALTER TABLE public.quote_events
@@ -41,9 +41,6 @@ CREATE INDEX IF NOT EXISTS uploads_agency_batch_idx
   ON public.uploads (agency_id, batch_id)
   WHERE batch_id IS NOT NULL;
 
--- 3. Admin-only DELETE policy.
-CREATE POLICY "Admins can delete uploads"
-  ON public.uploads
-  FOR DELETE
-  TO authenticated
-  USING (public.has_role(auth.uid(), 'admin'));
+-- 3. Admin DELETE is already granted by the existing "Admin full access to
+--    uploads" FOR ALL policy (see migration 20260322220909). No additional
+--    policy is required — non-admins have no DELETE policy and are blocked.

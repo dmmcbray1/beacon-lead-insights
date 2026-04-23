@@ -57,10 +57,10 @@ Single migration file, applied via Lovable.
 
 Six tables reference `uploads(id)` without cascade today. Each constraint is dropped and re-added with cascade:
 
-- `lead_identities.source_upload_id`
-- `lead_staff_assignments.source_upload_id`
+- `lead_identity_links.source_upload_id`
+- `lead_staff_history.source_upload_id`
 - `call_events.source_upload_id`
-- `lead_status_events.source_upload_id`
+- `status_events.source_upload_id`
 - `quote_events.source_upload_id`
 - `callback_events.source_upload_id`
 
@@ -81,21 +81,7 @@ Nullable because any grandfathered rows predate the feature. New imports always 
 
 ### 3. RLS policy: only admins can delete
 
-```sql
-CREATE POLICY "Admins can delete uploads"
-  ON public.uploads
-  FOR DELETE
-  TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM public.user_profiles
-      WHERE user_profiles.user_id = auth.uid()
-        AND user_profiles.role = 'admin'
-    )
-  );
-```
-
-(The exact admin predicate matches whatever the existing admin-gated features already use.)
+No new policy is added. The pre-existing `"Admin full access to uploads"` policy (migration `20260322220909`) already grants admins `FOR ALL` on `uploads`, which includes DELETE. Non-admins have no DELETE policy and are blocked by default.
 
 ## Import Service Changes (`src/lib/importService.ts`)
 
@@ -222,7 +208,7 @@ The existing `UploadCenter.tsx` (~435 lines) will grow meaningfully. Extract two
 
 ## Security
 
-- RLS policy gates DELETE to admins only, regardless of UI visibility.
+- Admin-only DELETE is enforced by the pre-existing `"Admin full access to uploads"` FOR ALL policy; non-admins have no DELETE policy and are blocked by RLS regardless of UI visibility.
 - The trash button is also hidden from non-admins, so the affordance matches the permission.
 - All existing RLS read/insert/update policies on `uploads` remain unchanged.
 
