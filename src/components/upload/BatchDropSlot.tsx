@@ -1,8 +1,13 @@
 import { useCallback, useState } from 'react';
-import { FileSpreadsheet, Upload, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { FileSpreadsheet, Upload, X, AlertTriangle, CheckCircle2, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { parseFile } from '@/lib/importService';
-import { REPORT_TYPES, DAILY_CALL_COLUMNS, DEER_DAMA_COLUMNS } from '@/lib/constants';
+import {
+  DAILY_CALL_COLUMNS,
+  DEER_DAMA_COLUMNS,
+  RICOCHET_COLUMNS,
+  REPORT_TYPES,
+} from '@/lib/constants';
 
 export interface BatchDropSlotValue {
   file: File;
@@ -13,7 +18,9 @@ export interface BatchDropSlotValue {
 }
 
 interface Props {
-  expectedType: typeof REPORT_TYPES.DAILY_CALL | typeof REPORT_TYPES.DEER_DAMA;
+  expectedType: typeof REPORT_TYPES.DAILY_CALL | typeof REPORT_TYPES.DEER_DAMA | typeof REPORT_TYPES.RICOCHET_LEAD_LIST;
+  disabled?: boolean;
+  disabledHelperText?: string;
   label: string;
   value: BatchDropSlotValue | null;
   onChange: (value: BatchDropSlotValue | null) => void;
@@ -21,15 +28,27 @@ interface Props {
 }
 
 function detectReportType(columns: string[]): string {
-  const colSet = new Set(columns.map((c) => c.toLowerCase().trim()));
-  const dailyMatch = DAILY_CALL_COLUMNS.filter((c) => colSet.has(c.toLowerCase())).length;
-  const deerMatch = DEER_DAMA_COLUMNS.filter((c) => colSet.has(c.toLowerCase())).length;
-  if (deerMatch > dailyMatch && deerMatch >= 5) return REPORT_TYPES.DEER_DAMA;
-  if (dailyMatch >= 5) return REPORT_TYPES.DAILY_CALL;
-  return '';
+  const lowered = columns.map((c) => c.toLowerCase());
+  const dailyMatch = lowered.filter((c) => DAILY_CALL_COLUMNS.includes(c as any)).length;
+  const deerMatch  = lowered.filter((c) => DEER_DAMA_COLUMNS.includes(c as any)).length;
+  const ricoMatch  = lowered.filter((c) => RICOCHET_COLUMNS.includes(c as any)).length;
+
+  // Pick the highest-scoring type that also meets the ≥5 threshold.
+  // Ties broken in favor of Ricochet, then Deer Dama, then Daily Call
+  // (Ricochet has the most unique columns, so a real Ricochet file will
+  // always out-score the other types).
+  const scores: Array<[number, string]> = [
+    [ricoMatch, REPORT_TYPES.RICOCHET_LEAD_LIST],
+    [deerMatch, REPORT_TYPES.DEER_DAMA],
+    [dailyMatch, REPORT_TYPES.DAILY_CALL],
+  ];
+  const [topScore, topType] = scores.reduce((best, cur) =>
+    cur[0] > best[0] ? cur : best
+  );
+  return topScore >= 5 ? topType : '';
 }
 
-export default function BatchDropSlot({ expectedType, label, value, onChange, onError }: Props) {
+export default function BatchDropSlot({ expectedType, label, value, onChange, onError, disabled, disabledHelperText }: Props) {
   const [dragOver, setDragOver] = useState(false);
 
   const handleFile = useCallback(
@@ -58,6 +77,7 @@ export default function BatchDropSlot({ expectedType, label, value, onChange, on
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
+    if (disabled) return;
     const file = e.dataTransfer.files[0];
     if (file) void handleFile(file);
   };
@@ -100,6 +120,17 @@ export default function BatchDropSlot({ expectedType, label, value, onChange, on
     );
   }
 
+  if (disabled) {
+    return (
+      <div className="flex flex-col items-center justify-center rounded-md border-2 border-dashed border-muted bg-muted/30 p-8 text-center opacity-60">
+        <Lock className="h-6 w-6 text-muted-foreground mb-2" aria-hidden />
+        <p className="text-sm text-muted-foreground">
+          {disabledHelperText ?? 'Upload the previous step first.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       onDragOver={(e) => {
@@ -121,6 +152,7 @@ export default function BatchDropSlot({ expectedType, label, value, onChange, on
           accept=".csv,.xlsx,.xls"
           className="hidden"
           onChange={(e) => {
+            if (disabled) return;
             const f = e.target.files?.[0];
             if (f) void handleFile(f);
           }}
