@@ -281,21 +281,43 @@ async function bulkLookupLeadsByPhone(
   phones: string[],
   agencyId: string,
 ): Promise<Map<string, { id: string; total_call_attempts: number; total_callbacks: number; total_voicemails: number; has_bad_phone: boolean; first_seen_date: string | null; first_contact_date: string | null; first_callback_date: string | null; first_quote_date: string | null; first_sold_date: string | null; first_daily_call_date: string | null; latest_call_date: string | null }>> {
-  if (phones.length === 0) return new Map();
+  type Row = {
+    id: string;
+    normalized_phone: string;
+    total_call_attempts: number;
+    total_callbacks: number;
+    total_voicemails: number;
+    has_bad_phone: boolean;
+    first_seen_date: string | null;
+    first_contact_date: string | null;
+    first_callback_date: string | null;
+    first_quote_date: string | null;
+    first_sold_date: string | null;
+    first_daily_call_date: string | null;
+    latest_call_date: string | null;
+  };
 
-  const { data } = await supabase
-    .from('leads')
-    .select(
-      'id, normalized_phone, total_call_attempts, total_callbacks, total_voicemails, has_bad_phone, first_seen_date, first_contact_date, first_callback_date, first_quote_date, first_sold_date, first_daily_call_date, latest_call_date',
-    )
-    .in('normalized_phone', phones)
-    .eq('agency_id', agencyId);
+  const map = new Map<string, Row>();
+  if (phones.length === 0) return map;
 
-  const map = new Map<string, (typeof data)[0]>();
-  for (const row of data ?? []) {
-    map.set(row.normalized_phone, row as (typeof data)[0]);
+  // Chunk the IN clause so multi-day imports don't exceed PostgREST URL limits
+  // or the default 1000-row cap, which would otherwise leave existing leads
+  // unmatched and trigger the (agency_id, normalized_phone) unique constraint.
+  const LOOKUP_BATCH = 500;
+  for (let i = 0; i < phones.length; i += LOOKUP_BATCH) {
+    const chunk = phones.slice(i, i + LOOKUP_BATCH);
+    const { data } = await supabase
+      .from('leads')
+      .select(
+        'id, normalized_phone, total_call_attempts, total_callbacks, total_voicemails, has_bad_phone, first_seen_date, first_contact_date, first_callback_date, first_quote_date, first_sold_date, first_daily_call_date, latest_call_date',
+      )
+      .eq('agency_id', agencyId)
+      .in('normalized_phone', chunk);
+    for (const row of (data ?? []) as Row[]) {
+      map.set(row.normalized_phone, row);
+    }
   }
-  return map as ReturnType<typeof bulkLookupLeadsByPhone> extends Promise<infer T> ? T : never;
+  return map;
 }
 
 async function lookupLeadByExternalId(externalId: string, agencyId: string): Promise<string | null> {
