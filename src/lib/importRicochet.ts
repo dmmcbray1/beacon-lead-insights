@@ -108,19 +108,11 @@ export async function detectRicochetMatches(
 }
 
 /**
- * Merge: Ricochet overwrites existing fields where it has a non-blank value;
- * blanks preserve existing data. Returns a partial lead row suitable for UPDATE.
+ * Build the partial-update payload for an "overwrite" decision.
+ * Blank incoming fields are omitted, so the UPDATE preserves whatever
+ * the existing lead has in those columns.
  */
-export function mergeLeadOverwrite(
-  existing: {
-    first_name: string | null; last_name: string | null; email: string | null;
-    street_address: string | null; city: string | null; state: string | null;
-    zip: string | null; campaign: string | null; lead_date: string | null;
-    dwelling_value: number | null; home_value: number | null; lead_cost: number | null;
-  },
-  incoming: RicochetRow
-): Record<string, unknown> {
-  void existing; // currently unused; could enable per-field diff/skip if needed
+export function mergeLeadOverwrite(incoming: RicochetRow): Record<string, unknown> {
   const merged: Record<string, unknown> = {};
   if (incoming.firstName     != null) merged.first_name     = incoming.firstName;
   if (incoming.lastName      != null) merged.last_name      = incoming.lastName;
@@ -222,15 +214,7 @@ export async function writeRicochetPhase(params: {
 
     // Match — log requote event regardless of decision.
     if (decision === 'overwrite') {
-      // Fetch existing to apply blank-preserving merge.
-      const { data: existingLead, error: fetchErr } = await supabase
-        .from('leads')
-        .select('first_name, last_name, email, street_address, city, state, zip, campaign, lead_date, dwelling_value, home_value, lead_cost')
-        .eq('id', match.id)
-        .single();
-      if (fetchErr) throw fetchErr;
-
-      const merged = mergeLeadOverwrite(existingLead as any, r);
+      const merged = mergeLeadOverwrite(r);
       if (Object.keys(merged).length > 0) {
         const { error: updErr } = await supabase
           .from('leads')
