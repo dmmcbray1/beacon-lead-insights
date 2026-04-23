@@ -108,6 +108,7 @@ export const CALLBACK_CALL_TYPES = ['Inbound Call', 'Inbound IVR'] as const;
 export const REPORT_TYPES = {
   DAILY_CALL: 'daily_call_report',
   DEER_DAMA: 'deer_dama_report',
+  RICOCHET_LEAD_LIST: 'ricochet_lead_list',
 } as const;
 
 // Expected columns for auto-detection
@@ -124,5 +125,26 @@ export const DEER_DAMA_COLUMNS = [
   'Email', 'Phone - Main',
   'First Call Date', 'Last Call Date', 'Total Calls',
 ];
+
+export const RICOCHET_COLUMNS = [
+  'first name',
+  'last name',
+  'street address',
+  'city',
+  'state',
+  'zip',
+  'phone',
+  'email',
+  'campaign',
+  'lead date',
+  'dwelling value',
+  'home value',
+  'cost',
+  'bedrooms',
+  'total bathrooms',
+  'building sqft',
+  'effective year built',
+  'number of stories',
+] as const;
 
 export const DEFAULT_AGENCY = 'McBrayer Agency';
