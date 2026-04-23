@@ -279,6 +279,7 @@ export async function importDailyCallReport(
   notes: string,
   onProgress?: (p: ImportProgress) => void,
   force = false,
+  batchId: string | null = null,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -322,6 +323,7 @@ export async function importDailyCallReport(
       // Store hash only on the first (non-forced) import so override re-imports
       // remain permitted under the partial unique index.
       file_hash: force ? null : fileHash,
+      batch_id: batchId,
     })
     .select('id')
     .single();
@@ -745,6 +747,7 @@ export async function importDeerDamaReport(
   notes: string,
   onProgress?: (p: ImportProgress) => void,
   force = false,
+  batchId: string | null = null,
 ): Promise<ImportResult> {
   staffCache.clear();
   const errors: string[] = [];
@@ -785,6 +788,7 @@ export async function importDeerDamaReport(
       status: 'processing',
       row_count: rows.length,
       file_hash: force ? null : fileHash,
+      batch_id: batchId,
     })
     .select('id')
     .single();
