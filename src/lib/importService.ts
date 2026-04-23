@@ -1221,6 +1221,123 @@ export async function importDeerDamaReport(
 }
 
 /**
+ * Import a Daily Call Report and a Deer Dama (Lead) Report as an atomic batch.
+ * Both uploads share a batch_id. If the second importer fails, the first
+ * upload is cascade-deleted so no half-imported state remains.
+ */
+export async function importBatch(
+  dailyCallFile: File,
+  deerDamaFile: File,
+  agencyId: string,
+  uploadDate: string,
+  notes: string,
+  onProgress: (p: BatchProgress) => void,
+  force: boolean,
+): Promise<BatchResult> {
+  const batchId = crypto.randomUUID();
+
+  // Duplicate check both files BEFORE any write so we can prompt once.
+  if (!force) {
+    const [dailyHash, deerHash] = await Promise.all([
+      computeFileHash(dailyCallFile),
+      computeFileHash(deerDamaFile),
+    ]);
+    const [dailyDupe, deerDupe] = await Promise.all([
+      findDuplicateUpload(dailyHash, agencyId),
+      findDuplicateUpload(deerHash, agencyId),
+    ]);
+    if (dailyDupe || deerDupe) {
+      return {
+        batchId,
+        dailyCall: emptyResult(),
+        deerDama: emptyResult(),
+        rolledBack: false,
+        duplicateOf: {
+          dailyCall: dailyDupe ?? undefined,
+          deerDama: deerDupe ?? undefined,
+        },
+      };
+    }
+  }
+
+  // Phase 1: Daily Call
+  const dailyCall = await importDailyCallReport(
+    dailyCallFile,
+    agencyId,
+    uploadDate,
+    notes,
+    (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
+    force,
+    batchId,
+  );
+
+  if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
+    // Daily Call failed outright. Wipe its uploads row (and any derived rows)
+    // via batch_id so no orphaned record remains.
+    await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'daily_call',
+      new Error(dailyCall.errors.join('; ')),
+    );
+  }
+
+  // Phase 2: Deer Dama
+  let deerDama: ImportResult;
+  try {
+    deerDama = await importDeerDamaReport(
+      deerDamaFile,
+      agencyId,
+      uploadDate,
+      notes,
+      (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
+      force,
+      batchId,
+    );
+  } catch (err) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'deer_dama',
+      err instanceof Error ? err : new Error(String(err)),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'deer_dama',
+      new Error(deerDama.errors.join('; ')),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  return { batchId, dailyCall, deerDama, rolledBack: false };
+}
+
+/** Fire-and-forget rollback; returns the error (if any) without throwing. */
+async function safeRollback(batchId: string): Promise<Error | null> {
+  try {
+    await deleteBatch(batchId);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+function emptyResult(): ImportResult {
+  return {
+    uploadId: '',
+    rowsTotal: 0,
+    rowsImported: 0,
+    rowsFiltered: 0,
+    rowsSkipped: 0,
+    newLeads: 0,
+    updatedLeads: 0,
+    errors: [],
+  };
+}
+
+/**
  * Delete a single upload row. Cascade FKs wipe all derived rows
  * (call_events, status_events, lead_identity_links, lead_staff_history,
  * quote_events, callback_events) and the raw_*_rows staging tables.
