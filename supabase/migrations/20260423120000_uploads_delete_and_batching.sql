@@ -33,6 +33,16 @@ ALTER TABLE public.callback_events
   ADD CONSTRAINT callback_events_source_upload_id_fkey
     FOREIGN KEY (source_upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
 
+ALTER TABLE public.match_audit_log
+  DROP CONSTRAINT IF EXISTS match_audit_log_upload_id_fkey,
+  ADD CONSTRAINT match_audit_log_upload_id_fkey
+    FOREIGN KEY (upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
+
+ALTER TABLE public.import_errors
+  DROP CONSTRAINT IF EXISTS import_errors_upload_id_fkey,
+  ADD CONSTRAINT import_errors_upload_id_fkey
+    FOREIGN KEY (upload_id) REFERENCES public.uploads(id) ON DELETE CASCADE;
+
 -- 2. Batch column — links the two uploads of a paired import.
 ALTER TABLE public.uploads
   ADD COLUMN IF NOT EXISTS batch_id UUID;

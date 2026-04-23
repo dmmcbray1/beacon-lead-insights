@@ -1260,10 +1260,11 @@ export async function importBatch(
     }
   }
 
-  // Per-importer force is always true: importBatch owns the dup-check decision
-  // above. Forwarding the caller's `force` would re-hash and re-check, and would
-  // trigger duplicate errors after the caller already overrode them.
-  const perFileForce = true;
+  // Forward the caller's `force` to per-importers so that file_hash is written
+  // correctly: hashed when force=false (preserves future dedup detection), null
+  // when force=true (the user overrode). The per-importers will re-check for
+  // duplicates, which is redundant when importBatch already checked above, but
+  // the redundant check returns the same result and writing the hash matters.
 
   // Phase 1: Daily Call
   const dailyCall = await importDailyCallReport(
@@ -1272,7 +1273,7 @@ export async function importBatch(
     uploadDate,
     notes,
     (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
-    perFileForce,
+    force,
     batchId,
   );
 
@@ -1296,7 +1297,7 @@ export async function importBatch(
       uploadDate,
       notes,
       (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
-      perFileForce,
+      force,
       batchId,
     );
   } catch (err) {
