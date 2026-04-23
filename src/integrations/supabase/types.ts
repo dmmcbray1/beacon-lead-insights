@@ -313,6 +313,77 @@ export type Database = {
           },
         ]
       }
+      lead_requote_events: {
+        Row: {
+          agency_id: string
+          batch_id: string | null
+          campaign: string | null
+          created_at: string
+          id: string
+          lead_cost: number | null
+          lead_date: string | null
+          lead_id: string
+          raw_row_id: string | null
+          upload_id: string
+          was_overwritten: boolean
+        }
+        Insert: {
+          agency_id: string
+          batch_id?: string | null
+          campaign?: string | null
+          created_at?: string
+          id?: string
+          lead_cost?: number | null
+          lead_date?: string | null
+          lead_id: string
+          raw_row_id?: string | null
+          upload_id: string
+          was_overwritten?: boolean
+        }
+        Update: {
+          agency_id?: string
+          batch_id?: string | null
+          campaign?: string | null
+          created_at?: string
+          id?: string
+          lead_cost?: number | null
+          lead_date?: string | null
+          lead_id?: string
+          raw_row_id?: string | null
+          upload_id?: string
+          was_overwritten?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lead_requote_events_agency_id_fkey"
+            columns: ["agency_id"]
+            isOneToOne: false
+            referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_requote_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_requote_events_raw_row_id_fkey"
+            columns: ["raw_row_id"]
+            isOneToOne: false
+            referencedRelation: "raw_ricochet_rows"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lead_requote_events_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       lead_staff_history: {
         Row: {
           created_at: string
@@ -370,88 +441,127 @@ export type Database = {
           agency_id: string
           calls_at_first_quote: number | null
           calls_at_first_sold: number | null
+          campaign: string | null
+          city: string | null
           created_at: string
           current_lead_type: string | null
           current_status: string | null
+          dwelling_value: number | null
+          email: string | null
           first_callback_date: string | null
           first_contact_date: string | null
           first_daily_call_date: string | null
           first_deer_dama_date: string | null
+          first_name: string | null
           first_quote_date: string | null
           first_seen_date: string | null
           first_sold_date: string | null
           has_bad_phone: boolean | null
+          home_value: number | null
           id: string
+          last_name: string | null
           latest_call_date: string | null
           latest_callback_date: string | null
           latest_contact_date: string | null
           latest_quote_date: string | null
           latest_vendor_name: string | null
+          lead_cost: number | null
+          lead_date: string | null
           lead_id_external: string | null
           normalized_phone: string
           raw_phone: string | null
+          ricochet_source_upload_id: string | null
+          state: string | null
+          street_address: string | null
           total_call_attempts: number | null
           total_callbacks: number | null
           total_voicemails: number | null
           updated_at: string
+          zip: string | null
         }
         Insert: {
           agency_id: string
           calls_at_first_quote?: number | null
           calls_at_first_sold?: number | null
+          campaign?: string | null
+          city?: string | null
           created_at?: string
           current_lead_type?: string | null
           current_status?: string | null
+          dwelling_value?: number | null
+          email?: string | null
           first_callback_date?: string | null
           first_contact_date?: string | null
           first_daily_call_date?: string | null
           first_deer_dama_date?: string | null
+          first_name?: string | null
           first_quote_date?: string | null
           first_seen_date?: string | null
           first_sold_date?: string | null
           has_bad_phone?: boolean | null
+          home_value?: number | null
           id?: string
+          last_name?: string | null
           latest_call_date?: string | null
           latest_callback_date?: string | null
           latest_contact_date?: string | null
           latest_quote_date?: string | null
           latest_vendor_name?: string | null
+          lead_cost?: number | null
+          lead_date?: string | null
           lead_id_external?: string | null
           normalized_phone: string
           raw_phone?: string | null
+          ricochet_source_upload_id?: string | null
+          state?: string | null
+          street_address?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
           total_voicemails?: number | null
           updated_at?: string
+          zip?: string | null
         }
         Update: {
           agency_id?: string
           calls_at_first_quote?: number | null
           calls_at_first_sold?: number | null
+          campaign?: string | null
+          city?: string | null
           created_at?: string
           current_lead_type?: string | null
           current_status?: string | null
+          dwelling_value?: number | null
+          email?: string | null
           first_callback_date?: string | null
           first_contact_date?: string | null
           first_daily_call_date?: string | null
           first_deer_dama_date?: string | null
+          first_name?: string | null
           first_quote_date?: string | null
           first_seen_date?: string | null
           first_sold_date?: string | null
           has_bad_phone?: boolean | null
+          home_value?: number | null
           id?: string
+          last_name?: string | null
           latest_call_date?: string | null
           latest_callback_date?: string | null
           latest_contact_date?: string | null
           latest_quote_date?: string | null
           latest_vendor_name?: string | null
+          lead_cost?: number | null
+          lead_date?: string | null
           lead_id_external?: string | null
           normalized_phone?: string
           raw_phone?: string | null
+          ricochet_source_upload_id?: string | null
+          state?: string | null
+          street_address?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
           total_voicemails?: number | null
           updated_at?: string
+          zip?: string | null
         }
         Relationships: [
           {
@@ -459,6 +569,13 @@ export type Database = {
             columns: ["agency_id"]
             isOneToOne: false
             referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "leads_ricochet_source_upload_id_fkey"
+            columns: ["ricochet_source_upload_id"]
+            isOneToOne: false
+            referencedRelation: "uploads"
             referencedColumns: ["id"]
           },
         ]
@@ -772,6 +889,93 @@ export type Database = {
           },
         ]
       }
+      raw_ricochet_rows: {
+        Row: {
+          agency_id: string
+          batch_id: string | null
+          campaign: string | null
+          city: string | null
+          created_at: string
+          dwelling_value: number | null
+          email: string | null
+          first_name: string | null
+          home_value: number | null
+          id: string
+          last_name: string | null
+          lead_cost: number | null
+          lead_date: string | null
+          normalized_phone: string | null
+          payload: Json | null
+          phone_raw: string | null
+          row_number: number | null
+          state: string | null
+          street_address: string | null
+          upload_id: string
+          zip: string | null
+        }
+        Insert: {
+          agency_id: string
+          batch_id?: string | null
+          campaign?: string | null
+          city?: string | null
+          created_at?: string
+          dwelling_value?: number | null
+          email?: string | null
+          first_name?: string | null
+          home_value?: number | null
+          id?: string
+          last_name?: string | null
+          lead_cost?: number | null
+          lead_date?: string | null
+          normalized_phone?: string | null
+          payload?: Json | null
+          phone_raw?: string | null
+          row_number?: number | null
+          state?: string | null
+          street_address?: string | null
+          upload_id: string
+          zip?: string | null
+        }
+        Update: {
+          agency_id?: string
+          batch_id?: string | null
+          campaign?: string | null
+          city?: string | null
+          created_at?: string
+          dwelling_value?: number | null
+          email?: string | null
+          first_name?: string | null
+          home_value?: number | null
+          id?: string
+          last_name?: string | null
+          lead_cost?: number | null
+          lead_date?: string | null
+          normalized_phone?: string | null
+          payload?: Json | null
+          phone_raw?: string | null
+          row_number?: number | null
+          state?: string | null
+          street_address?: string | null
+          upload_id?: string
+          zip?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "raw_ricochet_rows_agency_id_fkey"
+            columns: ["agency_id"]
+            isOneToOne: false
+            referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "raw_ricochet_rows_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       staff_members: {
         Row: {
           agency_id: string | null
@@ -882,6 +1086,7 @@ export type Database = {
           batch_id: string | null
           created_at: string
           error_count: number | null
+          file_hash: string | null
           file_name: string
           id: string
           matched_count: number | null
@@ -898,6 +1103,7 @@ export type Database = {
           batch_id?: string | null
           created_at?: string
           error_count?: number | null
+          file_hash?: string | null
           file_name: string
           id?: string
           matched_count?: number | null
@@ -914,6 +1120,7 @@ export type Database = {
           batch_id?: string | null
           created_at?: string
           error_count?: number | null
+          file_hash?: string | null
           file_name?: string
           id?: string
           matched_count?: number | null

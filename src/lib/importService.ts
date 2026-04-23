@@ -115,7 +115,8 @@ async function findDuplicateUpload(
     .eq('agency_id', agencyId)
     .eq('file_hash', fileHash)
     .order('created_at', { ascending: false })
-    .limit(1);
+    .limit(1)
+    .returns<{ id: string; file_name: string; upload_date: string }[]>();
   const match = data?.[0];
   if (!match) return null;
   return {
