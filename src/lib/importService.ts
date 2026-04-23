@@ -51,6 +51,45 @@ export interface ImportResult {
   };
 }
 
+export interface BatchProgress {
+  currentFile: 'daily_call' | 'deer_dama';
+  fileIndex: 1 | 2;
+  phase: string;
+  processed: number;
+  total: number;
+}
+
+export interface BatchResult {
+  batchId: string;
+  dailyCall: ImportResult;
+  deerDama: ImportResult;
+  rolledBack: boolean;
+  rollbackError?: string;
+  /**
+   * Populated when either file is a duplicate of a previously-imported file
+   * and `force` was false. When set, no rows were imported for either file —
+   * the caller should prompt the user and re-invoke importBatch with force: true.
+   */
+  duplicateOf?: {
+    dailyCall?: { uploadId: string; fileName: string; uploadDate: string };
+    deerDama?: { uploadId: string; fileName: string; uploadDate: string };
+  };
+}
+
+export class BatchRollbackError extends Error {
+  constructor(
+    public readonly failedFile: 'daily_call' | 'deer_dama',
+    public readonly originalError: Error,
+    public readonly rollbackError?: Error,
+  ) {
+    super(
+      `Batch failed on ${failedFile}: ${originalError.message}` +
+        (rollbackError ? ` (rollback also failed: ${rollbackError.message})` : ''),
+    );
+    this.name = 'BatchRollbackError';
+  }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Compute the SHA-256 hex digest of a file's raw bytes. */
