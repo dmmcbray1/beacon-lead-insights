@@ -35,6 +35,17 @@ export interface ImportProgress {
   total: number;
 }
 
+// Shared shape for rows skipped because their phone isn't present in `leads`.
+// Used by both importDailyCallReport and importDeerDamaReport — both bulk-
+// insert these into the `import_errors` table at the end of their runs.
+type UnmatchedError = {
+  upload_id: string;
+  row_number: number;
+  error_type: 'phone_not_in_leads';
+  error_message: string;
+  raw_data: Record<string, unknown>;
+};
+
 export interface ImportResult {
   uploadId: string;
   rowsTotal: number;
@@ -540,13 +551,6 @@ export async function importDailyCallReport(
   // This runs regardless of `force`: it only affects rows whose phone is
   // missing from leads, not duplicate-file re-imports.
 
-  type UnmatchedError = {
-    upload_id: string;
-    row_number: number;
-    error_type: 'phone_not_in_leads';
-    error_message: string;
-    raw_data: Record<string, unknown>;
-  };
   const unmatchedErrors: UnmatchedError[] = [];
   const matchedRows = validRows.filter((vr) => {
     if (existingMap.has(vr.phone)) return true;
@@ -1011,9 +1015,36 @@ export async function importDeerDamaReport(
     });
   }
 
-  // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
+  // ── Phase 1b: Skip rows whose phone is not in leads ────────────────────
+  // Phase 0 (Ricochet) is the authoritative source of new leads. Any Deer
+  // Dama row whose phone is not present in `leads` (either pre-existing or
+  // just created by Phase 0) is logged to `import_errors` and dropped here
+  // BEFORE any derived-table writes (leads upserts / raw rows / staff
+  // history).
+  //
+  // This runs regardless of `force`: it only affects rows whose phone is
+  // missing from leads, not duplicate-file re-imports.
+
   onProgress?.({ phase: 'Looking up existing leads…', processed: 0, total: validRows.length });
 
+  const allPhones = [...new Set(validRows.map((r) => r.phone))];
+  const existingPhoneMap = await bulkLookupLeadsByPhone(allPhones, agencyId);
+
+  const unmatchedErrors: UnmatchedError[] = [];
+  const matchedRows = validRows.filter((vr) => {
+    if (existingPhoneMap.has(vr.phone)) return true;
+    unmatchedErrors.push({
+      upload_id: uploadId,
+      row_number: vr.rowNum,
+      error_type: 'phone_not_in_leads',
+      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+      raw_data: vr.raw,
+    });
+    return false;
+  });
+  const rowsSkippedUnmatched = unmatchedErrors.length;
+
+  // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
   type ExistingLead = {
     id: string;
     first_contact_date: string | null;
@@ -1021,8 +1052,8 @@ export async function importDeerDamaReport(
     first_sold_date: string | null;
   };
 
-  const uniquePhones = [...new Set(validRows.map((r) => r.phone))];
-  const uniqueExternalIds = [...new Set(validRows.map((r) => r.externalId).filter(Boolean))];
+  const uniquePhones = [...new Set(matchedRows.map((r) => r.phone))];
+  const uniqueExternalIds = [...new Set(matchedRows.map((r) => r.externalId).filter(Boolean))];
 
   const phoneMap = new Map<string, ExistingLead>();
   const externalIdMap = new Map<string, ExistingLead>();
@@ -1090,7 +1121,7 @@ export async function importDeerDamaReport(
 
   const leadStates = new Map<string, LeadState>();
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const viaExternal = vr.externalId ? externalIdMap.get(vr.externalId) ?? null : null;
     const viaPhone = phoneMap.get(vr.phone) ?? null;
     const existing = viaExternal ?? viaPhone;
@@ -1147,7 +1178,7 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 3: Batch-insert new leads ─────────────────────────────────────
-  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: matchedRows.length });
 
   const newStates = [...leadStates.values()].filter((s) => s.isNew);
   const INSERT_BATCH = 100;
@@ -1193,7 +1224,7 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 4: Update existing leads ──────────────────────────────────────
-  onProgress?.({ phase: 'Updating existing leads…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Updating existing leads…', processed: 0, total: matchedRows.length });
 
   const toUpdate = [...leadStates.values()].filter((s) => !s.isNew && s.id);
   for (const s of toUpdate) {
@@ -1225,9 +1256,9 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 5: Resolve staff IDs + batch-insert raw rows & staff history ─
-  onProgress?.({ phase: 'Saving raw rows…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Saving raw rows…', processed: 0, total: matchedRows.length });
 
-  const uniqueOwners = [...new Set(validRows.map((r) => r.leadOwner).filter(Boolean))];
+  const uniqueOwners = [...new Set(matchedRows.map((r) => r.leadOwner).filter(Boolean))];
   const staffIds = new Map<string, string | null>();
   for (const owner of uniqueOwners) {
     staffIds.set(owner, await getOrCreateStaff(owner, agencyId));
@@ -1236,7 +1267,7 @@ export async function importDeerDamaReport(
   const rawBatch: Record<string, unknown>[] = [];
   const historyBatch: Record<string, unknown>[] = [];
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const state = leadStates.get(vr.phone);
     if (!state?.id) {
       rowsSkipped++;
@@ -1298,12 +1329,25 @@ export async function importDeerDamaReport(
     if (error) errors.push(`lead_staff_history batch error: ${error.message}`);
   }
 
+  // Persist unmatched-phone skips to import_errors so users can investigate
+  // rows that were dropped because their phone isn't in the lead set.
+  if (unmatchedErrors.length > 0) {
+    const ERR_BATCH = 500;
+    for (let i = 0; i < unmatchedErrors.length; i += ERR_BATCH) {
+      const { error } = await supabase
+        .from('import_errors')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .insert(unmatchedErrors.slice(i, i + ERR_BATCH) as any);
+      if (error) errors.push(`import_errors batch error: ${error.message}`);
+    }
+  }
+
   await supabase
     .from('uploads')
     .update({
       status: errors.length > 0 ? 'complete_with_errors' : 'complete',
       matched_count: rowsImported,
-      unmatched_count: rowsSkipped,
+      unmatched_count: rowsSkipped + rowsSkippedUnmatched,
       error_count: errors.length,
     })
     .eq('id', uploadId);
@@ -1314,6 +1358,7 @@ export async function importDeerDamaReport(
     rowsImported,
     rowsFiltered: 0,
     rowsSkipped,
+    rowsSkippedUnmatched,
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
