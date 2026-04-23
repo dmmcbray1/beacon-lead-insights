@@ -531,6 +531,36 @@ export async function importDailyCallReport(
   const uniquePhones = [...new Set(validRows.map((r) => r.phone))];
   const existingMap = await bulkLookupLeadsByPhone(uniquePhones, agencyId);
 
+  // ── Phase 2b: Skip rows whose phone is not in leads ───────────────────────
+  // Phase 0 (Ricochet) is the authoritative source of new leads. Any Daily
+  // Call row whose phone is not present in `leads` (either pre-existing or
+  // just created by Phase 0) is logged to `import_errors` and dropped here
+  // BEFORE any derived-table writes (leads / call_events / raw rows).
+  //
+  // This runs regardless of `force`: it only affects rows whose phone is
+  // missing from leads, not duplicate-file re-imports.
+
+  type UnmatchedError = {
+    upload_id: string;
+    row_number: number;
+    error_type: 'phone_not_in_leads';
+    error_message: string;
+    raw_data: Record<string, unknown>;
+  };
+  const unmatchedErrors: UnmatchedError[] = [];
+  const matchedRows = validRows.filter((vr) => {
+    if (existingMap.has(vr.phone)) return true;
+    unmatchedErrors.push({
+      upload_id: uploadId,
+      row_number: vr.rowNum,
+      error_type: 'phone_not_in_leads',
+      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+      raw_data: vr.raw,
+    });
+    return false;
+  });
+  const rowsSkippedUnmatched = unmatchedErrors.length;
+
   // Per-lead accumulated state for leads we're updating this run
   type LeadState = {
     id: string;
@@ -565,7 +595,7 @@ export async function importDailyCallReport(
     return a > b ? a : b;
   }
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const existing = existingMap.get(vr.phone);
 
     if (!leadStates.has(vr.phone)) {
@@ -633,8 +663,12 @@ export async function importDailyCallReport(
   }
 
   // ── Phase 3: Insert new leads ─────────────────────────────────────────────
+  // After the phone_not_in_leads filter above, every phone in `matchedRows`
+  // is already present in `existingMap`, so no new leads should be created
+  // here. This loop is retained as a safety net; it will iterate zero times
+  // under normal orchestrator-driven flow.
 
-  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: matchedRows.length });
 
   let newLeads = 0;
   const newPhones = [...leadStates.entries()].filter(([, s]) => s.isNew).map(([p]) => p);
@@ -718,13 +752,13 @@ export async function importDailyCallReport(
 
   // ── Phase 5: Insert call_events ───────────────────────────────────────────
 
-  onProgress?.({ phase: 'Saving call events…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Saving call events…', processed: 0, total: matchedRows.length });
 
   let rowsImported = 0;
   let rowsSkipped = 0;
 
   // Pre-fetch staff IDs for all unique user names
-  const uniqueUsers = [...new Set(validRows.map((r) => r.userName).filter(Boolean))];
+  const uniqueUsers = [...new Set(matchedRows.map((r) => r.userName).filter(Boolean))];
   const staffIds = new Map<string, string | null>();
   for (const user of uniqueUsers) {
     staffIds.set(user, await getOrCreateStaff(user, agencyId));
@@ -734,7 +768,7 @@ export async function importDailyCallReport(
   const callEventBatch: Record<string, unknown>[] = [];
   const rawRowBatch: Record<string, unknown>[] = [];
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const state = leadStates.get(vr.phone);
     if (!state?.id) {
       rowsSkipped++;
@@ -806,13 +840,26 @@ export async function importDailyCallReport(
     if (error) errors.push(`raw_daily_call_rows batch error: ${error.message}`);
   }
 
+  // Persist unmatched-phone skips to import_errors so users can investigate
+  // rows that were dropped because their phone isn't in the lead set.
+  if (unmatchedErrors.length > 0) {
+    const ERR_BATCH = 500;
+    for (let i = 0; i < unmatchedErrors.length; i += ERR_BATCH) {
+      const { error } = await supabase
+        .from('import_errors')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .insert(unmatchedErrors.slice(i, i + ERR_BATCH) as any);
+      if (error) errors.push(`import_errors batch error: ${error.message}`);
+    }
+  }
+
   // Finalise upload record
   await supabase
     .from('uploads')
     .update({
       status: errors.length > 0 ? 'complete_with_errors' : 'complete',
       matched_count: rowsImported,
-      unmatched_count: rowsSkipped + rowsFiltered,
+      unmatched_count: rowsSkipped + rowsFiltered + rowsSkippedUnmatched,
       error_count: errors.length,
     })
     .eq('id', uploadId);
@@ -823,6 +870,7 @@ export async function importDailyCallReport(
     rowsImported,
     rowsFiltered,
     rowsSkipped,
+    rowsSkippedUnmatched,
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
