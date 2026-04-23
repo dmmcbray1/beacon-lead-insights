@@ -139,11 +139,11 @@ BEGIN
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.leads'::regclass
       AND contype = 'u'
-      AND pg_get_constraintdef(oid) ILIKE '%(agency_id, phone_normalized)%'
+      AND pg_get_constraintdef(oid) ILIKE '%(agency_id, normalized_phone)%'
   ) THEN
     ALTER TABLE public.leads
       ADD CONSTRAINT leads_agency_phone_unique
-      UNIQUE (agency_id, phone_normalized);
+      UNIQUE (agency_id, normalized_phone);
   END IF;
 END $$;
 
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS public.raw_ricochet_rows (
   agency_id          uuid NOT NULL REFERENCES public.agencies(id),
   row_number         int,
   phone_raw          text,
-  phone_normalized   text,
+  normalized_phone   text,
   first_name         text,
   last_name          text,
   email              text,
@@ -178,8 +178,8 @@ CREATE INDEX IF NOT EXISTS idx_raw_ricochet_rows_upload_id
   ON public.raw_ricochet_rows (upload_id);
 CREATE INDEX IF NOT EXISTS idx_raw_ricochet_rows_batch_id
   ON public.raw_ricochet_rows (batch_id);
-CREATE INDEX IF NOT EXISTS idx_raw_ricochet_rows_phone_normalized
-  ON public.raw_ricochet_rows (phone_normalized);
+CREATE INDEX IF NOT EXISTS idx_raw_ricochet_rows_normalized_phone
+  ON public.raw_ricochet_rows (normalized_phone);
 
 ALTER TABLE public.raw_ricochet_rows ENABLE ROW LEVEL SECURITY;
 
@@ -396,14 +396,23 @@ Expected: FAIL — `RICOCHET_COLUMNS` is not exported, `REPORT_TYPES.RICOCHET_LE
 
 Edit `src/lib/constants.ts`:
 
-Add the new report type to `REPORT_TYPES`:
+**Important:** The existing `REPORT_TYPES` uses string values with a `_report` suffix:
 ```ts
 export const REPORT_TYPES = {
-  DAILY_CALL: 'daily_call',
-  DEER_DAMA: 'deer_dama',
+  DAILY_CALL: 'daily_call_report',
+  DEER_DAMA: 'deer_dama_report',
+} as const;
+```
+
+Do **not** overwrite the existing keys. Only append the new key. The resulting object should be:
+```ts
+export const REPORT_TYPES = {
+  DAILY_CALL: 'daily_call_report',
+  DEER_DAMA: 'deer_dama_report',
   RICOCHET_LEAD_LIST: 'ricochet_lead_list',
 } as const;
 ```
+(Verify the string value matches whatever is in the Task 1 migration — the migration is the source of truth for the DB value.)
 
 Add `RICOCHET_COLUMNS` immediately after `DEER_DAMA_COLUMNS`:
 ```ts
@@ -967,16 +976,16 @@ export async function detectRicochetMatches(
     const chunk = phones.slice(i, i + chunkSize);
     const { data, error } = await supabase
       .from('leads')
-      .select('id, phone_normalized, first_name, last_name, campaign, created_at, street_address, city, state')
+      .select('id, normalized_phone, first_name, last_name, campaign, created_at, street_address, city, state')
       .eq('agency_id', agencyId)
-      .in('phone_normalized', chunk);
+      .in('normalized_phone', chunk);
 
     if (error) throw error;
 
     for (const lead of data ?? []) {
-      existingByPhone.set(lead.phone_normalized as string, {
+      existingByPhone.set(lead.normalized_phone as string, {
         id: lead.id as string,
-        phoneNormalized: lead.phone_normalized as string,
+        phoneNormalized: lead.normalized_phone as string,
         firstName: (lead.first_name as string | null) ?? null,
         lastName: (lead.last_name as string | null) ?? null,
         campaign: (lead.campaign as string | null) ?? null,
@@ -1029,8 +1038,8 @@ export async function writeRicochetPhase(params: {
   batchId: string;
   agencyId: string;
   rows: RicochetRow[];
-  existingMatches: Map<string, RicochetMatch['existing']>; // keyed by phone_normalized
-  decisions: Map<string, RicochetDecision>;                // keyed by phone_normalized; missing = 'requote' default
+  existingMatches: Map<string, RicochetMatch['existing']>; // keyed by normalized_phone
+  decisions: Map<string, RicochetDecision>;                // keyed by normalized_phone; missing = 'requote' default
   parseErrors: RicochetRowParseError[];
 }): Promise<RicochetWriteSummary> {
   const { uploadId, batchId, agencyId, rows, existingMatches, decisions, parseErrors } = params;
@@ -1042,7 +1051,7 @@ export async function writeRicochetPhase(params: {
     agency_id: agencyId,
     row_number: r.rowNumber,
     phone_raw: r.phoneRaw,
-    phone_normalized: r.phoneNormalized,
+    normalized_phone: r.phoneNormalized,
     first_name: r.firstName,
     last_name: r.lastName,
     email: r.email,
@@ -1061,12 +1070,12 @@ export async function writeRicochetPhase(params: {
   const { data: rawRowsInserted, error: rawErr } = await supabase
     .from('raw_ricochet_rows')
     .insert(rawInserts)
-    .select('id, phone_normalized');
+    .select('id, normalized_phone');
   if (rawErr) throw rawErr;
 
   const rawIdByPhone = new Map<string, string>();
   for (const rr of rawRowsInserted ?? []) {
-    rawIdByPhone.set(rr.phone_normalized as string, rr.id as string);
+    rawIdByPhone.set(rr.normalized_phone as string, rr.id as string);
   }
 
   // 2. Route each row.
@@ -1082,7 +1091,7 @@ export async function writeRicochetPhase(params: {
       // No match → INSERT new lead.
       const { error: insErr } = await supabase.from('leads').insert({
         agency_id: agencyId,
-        phone_normalized: r.phoneNormalized,
+        normalized_phone: r.phoneNormalized,
         first_name: r.firstName,
         last_name: r.lastName,
         email: r.email,
@@ -1148,7 +1157,7 @@ export async function writeRicochetPhase(params: {
 npx tsc --noEmit
 ```
 
-Expected: no new errors. (If `phone_normalized` isn't a column on `leads`, the migration in Task 1 missed it — go back and add it.)
+Expected: no new errors. (If `normalized_phone` isn't a column on `leads`, the migration in Task 1 missed it — go back and add it.)
 
 - [ ] **Step 4: Commit**
 
