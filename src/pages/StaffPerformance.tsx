@@ -12,6 +12,8 @@ export default function StaffPerformance() {
     staff: 'all',
     leadType: 'all',
     dateBasis: 'call_date',
+    customFrom: undefined,
+    customTo: undefined,
   });
 
   const { data: staffData, isLoading, error } = useStaffPerformance(filters);

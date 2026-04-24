@@ -62,6 +62,7 @@ export interface ImportResult {
   newLeads: number;
   updatedLeads: number;
   errors: string[];
+  requoteLeadsCreated?: number;
   /**
    * Set when the file matches a previously-imported file (same SHA-256 hash
    * within the same agency) and the caller did not pass `force: true`.
@@ -555,28 +556,110 @@ export async function importDailyCallReport(
   // just created by Phase 0) is logged to `import_errors` and dropped here
   // BEFORE any derived-table writes (leads / call_events / raw rows).
   //
+  // Exception: rows that qualify as 7.1 Shark Tank requotes from specific
+  // vendors will auto-create a lead marked as re_quote before continuing.
+  //
   // This runs regardless of `force`: it only affects rows whose phone is
   // missing from leads, not duplicate-file re-imports.
 
+  // ── Requote auto-creation constants ────────────────────────────────────────
+  const REQUOTE_AUTO_CREATE_CALL_TYPES = [
+    'shark tank: requote (6 months) - cam - q',
+  ];
+  const REQUOTE_AUTO_CREATE_VENDORS = [
+    'new-home-to-beacon-territory-list-upload',
+    'new-home-priority-list',
+    'live-leads-priority-list-uploads',
+  ];
+
+  function shouldAutoCreateRequote(callType: string, vendorName: string): boolean {
+    const ct = callType.trim().toLowerCase();
+    const vn = vendorName.trim().toLowerCase();
+    return (
+      REQUOTE_AUTO_CREATE_CALL_TYPES.some((t) => ct.includes(t)) &&
+      REQUOTE_AUTO_CREATE_VENDORS.some((v) => vn === v)
+    );
+  }
+
   const unmatchedErrors: UnmatchedError[] = [];
-  const matchedRows = validRows.filter((vr) => {
-    if (existingMap.has(vr.phone)) return true;
-    unmatchedErrors.push({
-      upload_id: uploadId,
-      row_number: vr.rowNum,
-      error_type: 'phone_not_in_leads',
-      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
-      raw_data: vr.raw,
-    });
-    return false;
-  });
+  const matchedRows: typeof validRows = [];
+  let requoteLeadsCreated = 0;
+
+  for (const vr of validRows) {
+    if (existingMap.has(vr.phone)) {
+      matchedRows.push(vr);
+      continue;
+    }
+    // Check if this row qualifies for requote auto-creation
+    if (shouldAutoCreateRequote(vr.callType, vr.vendorName)) {
+      try {
+        const { data: newLead, error: newLeadErr } = await supabase
+          .from('leads')
+          .insert({
+            agency_id: agencyId,
+            normalized_phone: vr.phone,
+            current_lead_type: 're_quote',
+            current_status: '9.1 REQUOTE',
+            latest_vendor_name: vr.vendorName,
+            first_seen_date: vr.callDateStr,
+          })
+          .select('id')
+          .single();
+
+        if (newLeadErr || !newLead) {
+          errors.push(`Auto-create requote failed for phone=${vr.phone}: ${newLeadErr?.message ?? 'unknown'}`);
+          unmatchedErrors.push({
+            upload_id: uploadId,
+            row_number: vr.rowNum,
+            error_type: 'phone_not_in_leads',
+            error_message: vr.phone ? `phone=${vr.phone} not found in leads (requote create failed)` : 'phone missing',
+            raw_data: vr.raw,
+          });
+        } else {
+          existingMap.set(vr.phone, {
+            id: (newLead as { id: string }).id,
+            total_call_attempts: 0,
+            total_callbacks: 0,
+            total_voicemails: 0,
+            has_bad_phone: false,
+            first_seen_date: vr.callDateStr,
+            first_contact_date: null,
+            first_callback_date: null,
+            first_quote_date: null,
+            first_sold_date: null,
+            first_daily_call_date: null,
+            latest_call_date: null,
+          });
+          matchedRows.push(vr);
+          requoteLeadsCreated++;
+        }
+      } catch (e) {
+        errors.push(`Auto-create requote exception for phone=${vr.phone}: ${String(e)}`);
+        unmatchedErrors.push({
+          upload_id: uploadId,
+          row_number: vr.rowNum,
+          error_type: 'phone_not_in_leads',
+          error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+          raw_data: vr.raw,
+        });
+      }
+    } else {
+      unmatchedErrors.push({
+        upload_id: uploadId,
+        row_number: vr.rowNum,
+        error_type: 'phone_not_in_leads',
+        error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+        raw_data: vr.raw,
+      });
+    }
+  }
   const rowsSkippedUnmatched = unmatchedErrors.length;
 
   // Per-lead accumulated state for leads we're updating this run.
   // After the phone_not_in_leads filter above, every phone in matchedRows
   // already has a corresponding row in existingMap — so there is no "new
   // lead" branch here. Ricochet (Phase 0) is the authoritative source of
-  // new leads.
+  // new leads. (Exception: requote auto-creation above adds to existingMap.)
   type LeadState = {
     id: string;
     total_call_attempts: number;
@@ -848,6 +931,7 @@ export async function importDailyCallReport(
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
+    requoteLeadsCreated,
   };
 }
 

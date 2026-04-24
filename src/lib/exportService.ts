@@ -16,10 +16,15 @@ function todayStamp(): string {
 /** Convert a LeadListRow to a flat object suitable for a spreadsheet row. */
 function leadToExportRow(l: LeadListRow) {
   return {
+    Name: l.name ?? '',
     Phone: formatPhone(l.phone),
     'Lead ID': l.leadIdExternal ?? '',
     Type: l.leadType === 're_quote' ? 'Re-Quote' : 'New',
     Status: l.status,
+    Campaign: l.campaign ?? '',
+    'Lead Cost': l.leadCost != null ? l.leadCost : '',
+    Address: l.address ?? '',
+    Email: l.email ?? '',
     'First Seen': l.firstSeen ?? '',
     'First Contact': l.firstContact ?? '',
     'First Quote': l.firstQuote ?? '',

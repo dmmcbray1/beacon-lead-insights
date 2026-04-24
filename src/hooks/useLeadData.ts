@@ -4,7 +4,7 @@
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { subDays, startOfYear, format } from 'date-fns';
+import { subDays, startOfYear, startOfMonth, format } from 'date-fns';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { calculateKPIs, type LeadRecord, type KPIData } from '@/lib/metrics';
@@ -19,26 +19,34 @@ import {
 // ─── Filter types ─────────────────────────────────────────────────────────────
 
 export interface Filters {
-  dateRange: string;   // 'today' | '7d' | '30d' | '90d' | 'ytd' | 'all'
+  dateRange: string;   // 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'mtd' | 'ytd' | 'all' | 'custom'
   agency: string;      // 'all' or agency UUID
   staff: string;       // 'all' or staff UUID
   leadType: string;    // 'all' | 'new' | 're_quote'
   dateBasis: string;   // 'lead_created' | 'call_date' | 'first_contact' | 'first_quote' | 'callback_date'
   vendorFilter?: boolean;
+  customFrom?: string; // ISO date YYYY-MM-DD, used when dateRange === 'custom'
+  customTo?: string;   // ISO date YYYY-MM-DD, used when dateRange === 'custom'
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getDateBounds(dateRange: string): { from: string | null; to: string | null } {
+function getDateBounds(filters: Filters): { from: string | null; to: string | null } {
   const now = new Date();
   const today = format(now, 'yyyy-MM-dd');
-  switch (dateRange) {
-    case 'today': return { from: today, to: today };
-    case '7d':    return { from: format(subDays(now, 7), 'yyyy-MM-dd'), to: today };
-    case '30d':   return { from: format(subDays(now, 30), 'yyyy-MM-dd'), to: today };
-    case '90d':   return { from: format(subDays(now, 90), 'yyyy-MM-dd'), to: today };
-    case 'ytd':   return { from: format(startOfYear(now), 'yyyy-MM-dd'), to: today };
-    default:      return { from: null, to: null };
+  switch (filters.dateRange) {
+    case 'today':     return { from: today, to: today };
+    case 'yesterday': {
+      const y = format(subDays(now, 1), 'yyyy-MM-dd');
+      return { from: y, to: y };
+    }
+    case '7d':        return { from: format(subDays(now, 7), 'yyyy-MM-dd'), to: today };
+    case '30d':       return { from: format(subDays(now, 30), 'yyyy-MM-dd'), to: today };
+    case '90d':       return { from: format(subDays(now, 90), 'yyyy-MM-dd'), to: today };
+    case 'mtd':       return { from: format(startOfMonth(now), 'yyyy-MM-dd'), to: today };
+    case 'ytd':       return { from: format(startOfYear(now), 'yyyy-MM-dd'), to: today };
+    case 'custom':    return { from: filters.customFrom ?? null, to: filters.customTo ?? null };
+    default:          return { from: null, to: null };
   }
 }
 
@@ -114,6 +122,16 @@ type LeadRow = {
   has_bad_phone: boolean | null;
   latest_vendor_name: string | null;
   lead_id_external: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  street_address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  campaign: string | null;
+  lead_date: string | null;
+  lead_cost: number | null;
 };
 
 function toLeadRecord(lead: LeadRow): LeadRecord {
@@ -149,7 +167,8 @@ const LEAD_SELECT = `
   first_seen_date, first_contact_date, first_callback_date,
   first_quote_date, first_sold_date, latest_call_date,
   total_call_attempts, total_callbacks, total_voicemails, calls_at_first_quote, calls_at_first_sold,
-  has_bad_phone, latest_vendor_name, lead_id_external
+  has_bad_phone, latest_vendor_name, lead_id_external,
+  first_name, last_name, email, street_address, city, state, zip, campaign, lead_date, lead_cost
 `;
 
 /**
@@ -164,7 +183,7 @@ async function resolveStaffLeadIds(
 ): Promise<string[] | null> {
   if (!filters.staff || filters.staff === 'all') return null;
 
-  const { from, to } = getDateBounds(filters.dateRange);
+  const { from, to } = getDateBounds(filters);
   let q = supabase
     .from('call_events')
     .select('lead_id')
@@ -189,7 +208,7 @@ export function useLeads(filters: Filters) {
   return useQuery({
     queryKey: ['leads', filters, effectiveAgencyId],
     queryFn: async (): Promise<LeadRecord[]> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
       const dateField = getDateField(filters.dateBasis);
 
       const staffLeadIds = await resolveStaffLeadIds(filters, effectiveAgencyId);
@@ -252,55 +271,74 @@ export interface ContactTimingRow {
   pct: number;
 }
 
-const TIMING_BUCKETS = [
-  { label: 'Day 0',     min: 0,  max: 0 },
-  { label: 'Day 1',     min: 1,  max: 1 },
-  { label: 'Day 2–7',   min: 2,  max: 7 },
-  { label: 'Day 8–31',  min: 8,  max: 31 },
-  { label: '31+ Days',  min: 32, max: Infinity },
-];
-
-function calcContactTiming(leads: LeadRecord[]): ContactTimingRow[] {
-  const total = leads.length;
-  const counts: number[] = new Array(TIMING_BUCKETS.length + 1).fill(0); // +1 for "never"
-
-  for (const lead of leads) {
-    if (!lead.first_seen_date || !lead.first_contact_date) {
-      counts[TIMING_BUCKETS.length]++;
-      continue;
-    }
-    const days = Math.max(
-      0,
-      Math.round(
-        (new Date(lead.first_contact_date).getTime() - new Date(lead.first_seen_date).getTime()) / 86_400_000,
-      ),
-    );
-    const idx = TIMING_BUCKETS.findIndex((b) => days >= b.min && days <= b.max);
-    if (idx >= 0) counts[idx]++;
-    else counts[TIMING_BUCKETS.length]++;
-  }
-
-  const rows: ContactTimingRow[] = TIMING_BUCKETS.map((b, i) => ({
-    label: b.label,
-    count: counts[i],
-    pct: total > 0 ? (counts[i] / total) * 100 : 0,
-  }));
-
-  rows.push({
-    label: 'Never',
-    count: counts[TIMING_BUCKETS.length],
-    pct: total > 0 ? (counts[TIMING_BUCKETS.length] / total) * 100 : 0,
-  });
-
-  return rows;
-}
-
 export function useContactTiming(filters: Filters) {
-  const leadsQuery = useLeads(filters);
-  return {
-    ...leadsQuery,
-    timing: leadsQuery.data ? calcContactTiming(leadsQuery.data) : undefined,
-  };
+  const { agencyId, isAdmin } = useAuth();
+  const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
+
+  return useQuery({
+    queryKey: ['contactTiming', filters, effectiveAgencyId],
+    queryFn: async (): Promise<ContactTimingRow[]> => {
+      const { from, to } = getDateBounds(filters);
+
+      let q = supabase
+        .from('call_events')
+        .select('lead_id, call_date, call_type, call_direction')
+        .eq('is_contact', true)
+        .order('call_date', { ascending: true })
+        .limit(100000);
+
+      if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+      if (from) q = q.gte('call_date', from);
+      if (to) q = q.lte('call_date', to + 'T23:59:59');
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      // Take first contact call per lead
+      const firstContactByLead = new Map<string, { call_type: string | null; call_direction: string | null }>();
+      for (const ev of data ?? []) {
+        if (!firstContactByLead.has(ev.lead_id)) {
+          firstContactByLead.set(ev.lead_id, { call_type: ev.call_type, call_direction: ev.call_direction });
+        }
+      }
+
+      function classifyCallType(callType: string | null, direction: string | null): string {
+        if (!callType) return 'Other';
+        const ct = callType.toLowerCase();
+        if (direction === 'inbound' || ct.startsWith('inbound')) return 'Callback (Inbound)';
+        if (ct.includes('day 1') || ct.startsWith('9.5:') || ct.includes('day 1 ') || ct.includes('only  day 1')) return 'Day 1';
+        if (ct.includes('day 2') || ct.startsWith('9.5a')) return 'Day 2';
+        if (ct.includes('day 3') || ct.startsWith('9.5b')) return 'Day 3';
+        if (ct.includes('day 4') || ct.startsWith('9.5c')) return 'Day 4';
+        if (ct.includes('day 5') || ct.startsWith('9.5d')) return 'Day 5';
+        if (ct.includes('day 6') || ct.startsWith('9.5e')) return 'Day 6';
+        if (ct.includes('day 7') || ct.startsWith('9.5f')) return 'Day 7';
+        if (ct.includes('day 8') || ct.startsWith('9.5g')) return 'Day 8-13';
+        if (ct.includes('day 14') || ct.startsWith('9.5h')) return 'Day 14-21';
+        if (ct.includes('day 22') || ct.startsWith('9.5i')) return 'Day 22-30';
+        return 'Other';
+      }
+
+      const bucketLabels = ['Day 1','Day 2','Day 3','Day 4','Day 5','Day 6','Day 7','Day 8-13','Day 14-21','Day 22-30','Callback (Inbound)','Other'];
+      const counts = new Map<string, number>(bucketLabels.map(l => [l, 0]));
+
+      for (const { call_type, call_direction } of firstContactByLead.values()) {
+        const bucket = classifyCallType(call_type, call_direction);
+        counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+      }
+
+      const total = firstContactByLead.size;
+      return bucketLabels
+        .filter(l => (counts.get(l) ?? 0) > 0)
+        .map(l => ({
+          label: l,
+          count: counts.get(l) ?? 0,
+          pct: total > 0 ? ((counts.get(l) ?? 0) / total) * 100 : 0,
+        }));
+    },
+    enabled: isAdmin ? true : !!agencyId,
+    staleTime: 30_000,
+  });
 }
 
 // ─── Staff performance ────────────────────────────────────────────────────────
@@ -329,7 +367,7 @@ export function useStaffPerformance(filters: Filters) {
   return useQuery({
     queryKey: ['staffPerf', filters, effectiveAgencyId],
     queryFn: async (): Promise<StaffPerfRow[]> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
 
       // Fetch call_events with staff info
       let evQ = supabase
@@ -414,8 +452,14 @@ export function useStaffPerformance(filters: Filters) {
 export interface CallQualityMetrics {
   avgDialsBeforeContact: number;
   avgContactCallDurationSec: number;
+  /** All call_events in the period */
+  totalCallsMade: number;
+  /** call_events where call_direction === 'inbound' */
+  totalInboundCalls: number;
   /** Total outbound calls in period */
   totalOutboundCalls: number;
+  /** Total outbound calls (same as totalOutboundCalls, kept for compatibility) */
+  totalOutboundCallsAll: number;
   /** Outbound calls where a voicemail was left */
   voicemailCallCount: number;
   /** voicemailCallCount / totalOutboundCalls */
@@ -433,7 +477,7 @@ export function useCallQuality(filters: Filters) {
   return useQuery({
     queryKey: ['callQuality', filters, effectiveAgencyId],
     queryFn: async (): Promise<CallQualityMetrics> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
 
       let q = supabase
         .from('call_events')
@@ -448,6 +492,9 @@ export function useCallQuality(filters: Filters) {
       if (error) throw error;
 
       const events = data ?? [];
+
+      const totalCallsMade = events.length;
+      const totalInboundCalls = events.filter(e => e.call_direction === 'inbound').length;
 
       // Avg duration of calls where contact was made
       const contactEvents = events.filter(e => e.is_contact && (e.call_duration_seconds ?? 0) > 0);
@@ -486,7 +533,10 @@ export function useCallQuality(filters: Filters) {
       return {
         avgDialsBeforeContact: leadsWithContact > 0 ? totalDials / leadsWithContact : 0,
         avgContactCallDurationSec,
+        totalCallsMade,
+        totalInboundCalls,
         totalOutboundCalls,
+        totalOutboundCallsAll: totalOutboundCalls,
         voicemailCallCount,
         voicemailCallRate,
         callsOver5Min,
@@ -515,7 +565,7 @@ export function useDailyTrends(filters: Filters) {
   return useQuery({
     queryKey: ['dailyTrends', filters, effectiveAgencyId],
     queryFn: async (): Promise<DailyTrendRow[]> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
 
       let q = supabase
         .from('call_events')
@@ -620,6 +670,11 @@ export interface LeadListRow {
   callbacks: number;
   vendor: string | null;
   isBadPhone: boolean;
+  name: string | null;
+  email: string | null;
+  address: string | null;
+  campaign: string | null;
+  leadCost: number | null;
 }
 
 export function useLeadList(filters: Filters & { search?: string }) {
@@ -629,7 +684,7 @@ export function useLeadList(filters: Filters & { search?: string }) {
   return useQuery({
     queryKey: ['leadList', filters, effectiveAgencyId],
     queryFn: async (): Promise<LeadListRow[]> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
       const dateField = getDateField(filters.dateBasis);
 
       const staffLeadIds = await resolveStaffLeadIds(filters, effectiveAgencyId);
@@ -664,6 +719,11 @@ export function useLeadList(filters: Filters & { search?: string }) {
         callbacks: l.total_callbacks ?? 0,
         vendor: l.latest_vendor_name,
         isBadPhone: l.has_bad_phone ?? false,
+        name: [l.first_name, l.last_name].filter(Boolean).join(' ') || null,
+        email: l.email,
+        address: [l.street_address, l.city, l.state].filter(Boolean).join(', ') || null,
+        campaign: l.campaign,
+        leadCost: l.lead_cost,
       }));
     },
     enabled: isAdmin ? true : !!agencyId,
@@ -731,7 +791,7 @@ export function useSalesData(filters: Filters) {
   return useQuery({
     queryKey: ['salesData', filters, effectiveAgencyId],
     queryFn: async (): Promise<SalesData> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
 
       let q = supabase
         .from('sales_events')
@@ -879,7 +939,7 @@ export function useROIData(filters: Filters) {
   return useQuery({
     queryKey: ['roiData', filters, effectiveAgencyId],
     queryFn: async (): Promise<ROIData> => {
-      const { from, to } = getDateBounds(filters.dateRange);
+      const { from, to } = getDateBounds(filters);
 
       // ── Leads data ───────────────────────────────────────────────────────
       let leadsQ = supabase
@@ -995,6 +1055,53 @@ export function useROIData(filters: Filters) {
       }).sort((a, b) => b.spend - a.spend);
 
       return { metrics, byCampaign };
+    },
+    enabled: isAdmin ? true : !!agencyId,
+    staleTime: 30_000,
+  });
+}
+
+// ─── Sold summary (for dashboard card) ─────────────────────────────────────────────
+
+export interface SoldSummary {
+  householdsSold: number;
+  itemsSold: number;
+  policiesSold: number;
+  totalPremium: number;
+}
+
+export function useSoldSummary(filters: Filters) {
+  const { agencyId, isAdmin } = useAuth();
+  const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
+
+  return useQuery({
+    queryKey: ['soldSummary', filters, effectiveAgencyId],
+    queryFn: async (): Promise<SoldSummary> => {
+      const { from, to } = getDateBounds(filters);
+
+      let q = supabase
+        .from('sales_events')
+        .select('sale_id, items, premium')
+        .limit(100000);
+
+      if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+      if (from) q = q.gte('sale_date', from);
+      if (to) q = q.lte('sale_date', to);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const events = data ?? [];
+      const households = new Set(events.map(e => e.sale_id));
+      const itemsSold = events.reduce((s, e) => s + (e.items ?? 1), 0);
+      const totalPremium = events.reduce((s, e) => s + (Number(e.premium) || 0), 0);
+
+      return {
+        householdsSold: households.size,
+        itemsSold,
+        policiesSold: events.length,
+        totalPremium,
+      };
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,

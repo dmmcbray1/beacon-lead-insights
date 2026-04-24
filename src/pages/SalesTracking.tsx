@@ -20,6 +20,8 @@ const defaultFilters: Filters = {
   staff: 'all',
   leadType: 'all',
   dateBasis: 'lead_created',
+  customFrom: undefined,
+  customTo: undefined,
 };
 
 function fmt(n: number, decimals = 0): string {

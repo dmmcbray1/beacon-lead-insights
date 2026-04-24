@@ -6,6 +6,11 @@ import { useLeadList, type Filters } from '@/hooks/useLeadData';
 import { formatPhone } from '@/lib/phone';
 import { exportLeadsToXlsx } from '@/lib/exportService';
 
+const HEADERS = [
+  'Name', 'Phone', 'Type', 'Status', 'Campaign', 'Lead Cost',
+  'Address', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'CB', 'Bad?',
+];
+
 export default function LeadExplorer() {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -17,6 +22,8 @@ export default function LeadExplorer() {
     leadType: typeFilter === 'all' ? 'all' : typeFilter,
     dateBasis: 'lead_created',
     vendorFilter: false,
+    customFrom: undefined,
+    customTo: undefined,
   };
 
   const { data: leads, isLoading, error } = useLeadList({ ...filters, search });
@@ -28,7 +35,10 @@ export default function LeadExplorer() {
       l.phone.includes(search.replace(/\D/g, '')) ||
       formatPhone(l.phone).includes(search) ||
       (l.leadIdExternal?.toLowerCase().includes(s) ?? false) ||
-      l.status.toLowerCase().includes(s)
+      l.status.toLowerCase().includes(s) ||
+      (l.name?.toLowerCase().includes(s) ?? false) ||
+      (l.email?.toLowerCase().includes(s) ?? false) ||
+      (l.campaign?.toLowerCase().includes(s) ?? false)
     );
   });
 
@@ -59,7 +69,7 @@ export default function LeadExplorer() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by phone, Lead ID, or status…"
+            placeholder="Search by name, phone, email, campaign, status…"
             className="w-full pl-9 pr-3 py-2 text-sm bg-secondary rounded-md border-0 outline-none text-foreground placeholder:text-muted-foreground"
           />
         </div>
@@ -79,7 +89,7 @@ export default function LeadExplorer() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-muted">
-                {['Phone', 'Lead ID', 'Type', 'Status', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'CB', 'Bad?'].map((h) => (
+                {HEADERS.map((h) => (
                   <th key={h} className="px-3 py-2.5 text-left font-medium text-foreground whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -88,8 +98,11 @@ export default function LeadExplorer() {
               {Array.from({ length: 8 }).map((_, i) => (
                 <tr key={i} className="border-t">
                   <td className="px-3 py-2.5"><Skeleton className="h-4 w-28" /></td>
-                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-28" /></td>
                   <td className="px-3 py-2.5"><Skeleton className="h-5 w-16 rounded-full" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-32" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
+                  <td className="px-3 py-2.5"><Skeleton className="h-4 w-16" /></td>
                   <td className="px-3 py-2.5"><Skeleton className="h-4 w-32" /></td>
                   <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
                   <td className="px-3 py-2.5"><Skeleton className="h-4 w-20" /></td>
@@ -115,7 +128,7 @@ export default function LeadExplorer() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted">
-                  {['Phone', 'Lead ID', 'Type', 'Status', 'First Seen', 'First Contact', 'First Quote', 'Calls', 'CB', 'Bad?'].map((h) => (
+                  {HEADERS.map((h) => (
                     <th key={h} className="px-3 py-2.5 text-left font-medium text-foreground whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -123,19 +136,22 @@ export default function LeadExplorer() {
               <tbody>
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="px-4 py-8 text-center text-muted-foreground text-sm">
+                    <td colSpan={13} className="px-4 py-8 text-center text-muted-foreground text-sm">
                       {search ? 'No leads match your search.' : 'No leads yet. Upload a report to get started.'}
                     </td>
                   </tr>
                 )}
                 {filtered.map((lead) => (
                   <tr key={lead.id} className="border-t hover:bg-muted/50 transition-colors">
+                    {/* Name */}
+                    <td className="px-3 py-2.5 text-foreground whitespace-nowrap">
+                      {lead.name || '—'}
+                    </td>
+                    {/* Phone */}
                     <td className="px-3 py-2.5 font-medium text-foreground whitespace-nowrap font-mono text-xs">
                       {formatPhone(lead.phone)}
                     </td>
-                    <td className="px-3 py-2.5 text-primary font-mono text-xs">
-                      {lead.leadIdExternal || '—'}
-                    </td>
+                    {/* Type */}
                     <td className="px-3 py-2.5">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                         lead.leadType === 'new_lead' ? 'bg-primary/10 text-primary' : 'bg-kpi-callbacks/10'
@@ -143,14 +159,33 @@ export default function LeadExplorer() {
                         {lead.leadType === 'new_lead' ? 'New' : 'Re-Quote'}
                       </span>
                     </td>
+                    {/* Status */}
                     <td className="px-3 py-2.5 text-muted-foreground text-xs whitespace-nowrap max-w-[180px] truncate">
                       {lead.status || '—'}
                     </td>
+                    {/* Campaign */}
+                    <td className="px-3 py-2.5 text-muted-foreground text-xs whitespace-nowrap max-w-[140px] truncate">
+                      {lead.campaign || '—'}
+                    </td>
+                    {/* Lead Cost */}
+                    <td className="px-3 py-2.5 text-muted-foreground tabular-nums whitespace-nowrap">
+                      {lead.leadCost != null ? '$' + lead.leadCost.toFixed(2) : '—'}
+                    </td>
+                    {/* Address */}
+                    <td className="px-3 py-2.5 text-muted-foreground text-xs max-w-[160px] truncate">
+                      {lead.address || '—'}
+                    </td>
+                    {/* First Seen */}
                     <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstSeen ?? '—'}</td>
+                    {/* First Contact */}
                     <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstContact ?? '—'}</td>
+                    {/* First Quote */}
                     <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{lead.firstQuote ?? '—'}</td>
+                    {/* Calls */}
                     <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.calls}</td>
+                    {/* CB */}
                     <td className="px-3 py-2.5 text-muted-foreground tabular-nums">{lead.callbacks}</td>
+                    {/* Bad? */}
                     <td className="px-3 py-2.5">
                       {lead.isBadPhone && (
                         <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">Bad</span>

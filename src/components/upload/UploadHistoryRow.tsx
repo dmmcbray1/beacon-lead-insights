@@ -74,7 +74,11 @@ export default function UploadHistoryRow({ batchId, rows, isAdmin }: Props) {
         >
           <td className="px-4 py-2.5 font-medium text-foreground max-w-[200px] truncate">{row.file_name}</td>
           <td className="px-4 py-2.5 text-muted-foreground">
-            {row.report_type === REPORT_TYPES.DAILY_CALL ? 'Daily Call' : 'Deer Dama'}
+            {row.report_type === REPORT_TYPES.DAILY_CALL
+              ? 'Daily Call'
+              : row.report_type === 'sales_log'
+              ? 'Sales Log'
+              : 'Deer Dama'}
           </td>
           <td className="px-4 py-2.5 text-muted-foreground">{row.upload_date}</td>
           <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{row.row_count ?? '—'}</td>
@@ -83,7 +87,9 @@ export default function UploadHistoryRow({ batchId, rows, isAdmin }: Props) {
             <span
               className={`text-xs font-medium px-2 py-0.5 rounded-full ${
                 row.status === 'complete'
-                  ? 'bg-success/10 text-success'
+                  ? row.report_type === 'sales_log'
+                    ? 'bg-emerald-500/10 text-emerald-600'
+                    : 'bg-success/10 text-success'
                   : row.status === 'complete_with_errors'
                   ? 'bg-warning/10 text-warning'
                   : 'bg-muted text-muted-foreground'

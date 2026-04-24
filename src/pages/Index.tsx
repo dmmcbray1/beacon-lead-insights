@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import {
-  Layers, Activity, Target, ShieldCheck, AlertTriangle,
+  Layers, Activity, Target, ShieldCheck, AlertTriangle, DollarSign,
 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import FlipKPICard from '@/components/FlipKPICard';
 import FilterBar from '@/components/FilterBar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatPercent, formatNumber } from '@/lib/metrics';
-import { useKPIs, useContactTiming, useCallQuality, useDailyTrends, type Filters } from '@/hooks/useLeadData';
+import { useKPIs, useContactTiming, useCallQuality, useDailyTrends, useSoldSummary, type Filters } from '@/hooks/useLeadData';
 
 export default function Dashboard() {
   const [filters, setFilters] = useState<Filters>({
@@ -17,12 +17,15 @@ export default function Dashboard() {
     leadType: 'all',
     dateBasis: 'lead_created',
     vendorFilter: true,
+    customFrom: undefined,
+    customTo: undefined,
   });
 
   const { kpis, isLoading, error } = useKPIs(filters);
-  const { timing } = useContactTiming(filters);
+  const { data: timing } = useContactTiming(filters);
   const { data: callQuality } = useCallQuality(filters);
   const { data: dailyTrends } = useDailyTrends(filters);
+  const { data: soldSummary } = useSoldSummary(filters);
 
   const nb = kpis?.newBreakdown;
   const rb = kpis?.reQuoteBreakdown;
@@ -43,6 +46,8 @@ export default function Dashboard() {
       color: 'hsl(var(--kpi-leads))',
       breakdownRows: [
         { label: 'Total Leads', newValue: formatNumber(nb.leads), reQuoteValue: formatNumber(rb.leads) },
+        { label: 'Total Calls Made', newValue: formatNumber(callQuality?.totalCallsMade ?? 0), reQuoteValue: '—' },
+        { label: 'Total Inbound Calls', newValue: formatNumber(callQuality?.totalInboundCalls ?? 0), reQuoteValue: '—' },
       ],
     },
     {
@@ -118,6 +123,19 @@ export default function Dashboard() {
         { label: 'DNC Rate', newValue: formatPercent(nb.doNotCallRate), reQuoteValue: formatPercent(rb.doNotCallRate) },
       ],
     },
+    {
+      title: 'Sales Results',
+      summaryValue: soldSummary ? `$${(soldSummary.totalPremium / 1000).toFixed(1)}k` : '—',
+      summaryLabel: 'Total Premium',
+      icon: DollarSign,
+      color: 'hsl(152, 60%, 40%)',
+      breakdownRows: [
+        { label: 'Households Sold', newValue: formatNumber(soldSummary?.householdsSold ?? 0), reQuoteValue: '—' },
+        { label: 'Items Sold', newValue: formatNumber(soldSummary?.itemsSold ?? 0), reQuoteValue: '—' },
+        { label: 'Policies Sold', newValue: formatNumber(soldSummary?.policiesSold ?? 0), reQuoteValue: '—' },
+        { label: 'Total Premium', newValue: soldSummary ? `$${soldSummary.totalPremium.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—', reQuoteValue: '—' },
+      ],
+    },
   ] : [];
 
   return (
@@ -133,8 +151,8 @@ export default function Dashboard() {
 
       {/* Skeleton loading */}
       {isLoading && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="bg-card rounded-lg border p-5">
               <div className="flex items-start justify-between mb-3">
                 <Skeleton className="w-10 h-10 rounded-lg" />
@@ -154,7 +172,7 @@ export default function Dashboard() {
 
       {/* KPI cards */}
       {!isLoading && groupedCards.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
           {groupedCards.map((card) => (
             <FlipKPICard key={card.title} {...card} />
           ))}
@@ -228,7 +246,7 @@ export default function Dashboard() {
           {/* Contact Timing */}
           <div className="bg-card rounded-lg border p-5">
             <h3 className="section-title mb-1">Contact Timing</h3>
-            <p className="text-xs text-muted-foreground mb-4">Days from first seen to first contact</p>
+            <p className="text-xs text-muted-foreground mb-4">First contact call by 9.5x campaign day bucket</p>
             <div className="space-y-3">
               {(timing ?? []).map((row) => (
                 <div key={row.label}>
@@ -243,8 +261,8 @@ export default function Dashboard() {
                       className="h-full rounded-full transition-all duration-500"
                       style={{
                         width: `${Math.min(100, row.pct)}%`,
-                        backgroundColor: row.label === 'Never' ? 'hsl(var(--kpi-bad))' : 'hsl(var(--kpi-leads))',
-                        opacity: row.label === 'Never' ? 0.7 : 1,
+                        backgroundColor: row.label === 'Other' ? 'hsl(var(--kpi-bad))' : row.label === 'Callback (Inbound)' ? 'hsl(270,55%,50%)' : 'hsl(var(--kpi-leads))',
+                        opacity: row.label === 'Other' ? 0.7 : 1,
                       }}
                     />
                   </div>

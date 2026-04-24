@@ -556,6 +556,7 @@ export default function UploadCenter() {
                 rows={[
                   { icon: 'success', text: `${state.result.dailyCall.rowsImported} call events imported` },
                   { icon: 'info', text: `${state.result.dailyCall.updatedLeads} leads updated` },
+                  { icon: 'info', text: `${state.result.dailyCall.requoteLeadsCreated ?? 0} re-quote leads auto-created` },
                   {
                     icon: 'warn',
                     text: `${state.result.dailyCall.rowsSkippedUnmatched ?? 0} rows skipped (phone not in leads)`,

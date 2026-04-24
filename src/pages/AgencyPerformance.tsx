@@ -54,6 +54,8 @@ export default function AgencyPerformance() {
     leadType: 'all',
     dateBasis: 'lead_created',
     vendorFilter: true,
+    customFrom: undefined,
+    customTo: undefined,
   });
 
   const { data: agencies, isLoading } = useAgencies();

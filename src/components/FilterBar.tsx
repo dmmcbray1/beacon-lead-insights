@@ -10,6 +10,8 @@ interface FilterBarFilters {
   leadType: string;
   dateBasis: string;
   vendorFilter?: boolean;
+  customFrom?: string;
+  customTo?: string;
 }
 
 interface FilterBarProps {
@@ -38,13 +40,25 @@ export default function FilterBar({ filters, onChange }: FilterBarProps) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="today">Today</SelectItem>
+            <SelectItem value="yesterday">Yesterday</SelectItem>
             <SelectItem value="7d">Last 7 Days</SelectItem>
+            <SelectItem value="mtd">Month to Date</SelectItem>
             <SelectItem value="30d">Last 30 Days</SelectItem>
             <SelectItem value="90d">Last 90 Days</SelectItem>
             <SelectItem value="ytd">Year to Date</SelectItem>
             <SelectItem value="all">All Time</SelectItem>
+            <SelectItem value="custom">Custom Range</SelectItem>
           </SelectContent>
         </Select>
+        {filters.dateRange === 'custom' && (
+          <div className="flex items-center gap-1.5 mt-2">
+            <input type="date" value={filters.customFrom ?? ''} onChange={(e) => update('customFrom', e.target.value)}
+              className="h-8 bg-secondary rounded-md px-2 text-sm border-0 outline-none" />
+            <span className="text-muted-foreground text-xs">to</span>
+            <input type="date" value={filters.customTo ?? ''} onChange={(e) => update('customTo', e.target.value)}
+              className="h-8 bg-secondary rounded-md px-2 text-sm border-0 outline-none" />
+          </div>
+        )}
       </div>
 
       {/* Date Basis */}
