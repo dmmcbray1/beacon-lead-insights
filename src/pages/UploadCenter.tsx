@@ -46,13 +46,11 @@ interface BatchState {
   ricochet: BatchDropSlotValue | null;
   dailyCall: BatchDropSlotValue | null;
   deerDama: BatchDropSlotValue | null;
-  salesLog: BatchDropSlotValue | null;
   uploadDate: string;
   notes: string;
   step: Step;
   progress: BatchProgress | null;
   result: BatchResult | null;
-  salesResult: SalesImportResult | null;
   rollbackMessage: string | null;
   requoteMatches: RicochetMatch[] | null;
   parsedState: ParsedBatchState | null;
@@ -71,13 +69,11 @@ const initialState: BatchState = {
   ricochet: null,
   dailyCall: null,
   deerDama: null,
-  salesLog: null,
   uploadDate: new Date().toISOString().split('T')[0],
   notes: '',
   step: 'select',
   progress: null,
   result: null,
-  salesResult: null,
   rollbackMessage: null,
   requoteMatches: null,
   parsedState: null,
@@ -107,6 +103,30 @@ export default function UploadCenter() {
 
   const [state, setState] = useState<BatchState>(initialState);
   const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicateInfo | null>(null);
+
+  // ── Independent Sales Log upload state ────────────────────────────────────
+  const [salesSlot, setSalesSlot] = useState<BatchDropSlotValue | null>(null);
+  const [salesDate, setSalesDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [salesImporting, setSalesImporting] = useState(false);
+  const [salesResult, setSalesResult] = useState<SalesImportResult | null>(null);
+  const [salesError, setSalesError] = useState<string | null>(null);
+
+  const runSalesImport = async () => {
+    if (!salesSlot?.file || !agencyId) return;
+    setSalesImporting(true);
+    setSalesResult(null);
+    setSalesError(null);
+    try {
+      const result = await importSalesLog(salesSlot.file, agencyId, salesDate, 'standalone');
+      setSalesResult(result);
+      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+      await queryClient.invalidateQueries({ queryKey: ['leads'] });
+    } catch (err) {
+      setSalesError(String(err));
+    } finally {
+      setSalesImporting(false);
+    }
+  };
   const [skippedModal, setSkippedModal] = useState<
     { title: string; uploadId: string } | null
   >(null);
@@ -170,26 +190,8 @@ export default function UploadCenter() {
         return;
       }
 
-      // Run Sales Log import if present (optional slot)
-      let salesResult: SalesImportResult | null = null;
-      if (state.salesLog?.file && agencyId) {
-        try {
-          salesResult = await importSalesLog(
-            state.salesLog.file,
-            agencyId,
-            state.uploadDate,
-            'batch_import',
-          );
-        } catch (salesErr) {
-          salesResult = {
-            totalRows: 0, imported: 0, filtered: 0,
-            newLeadsCreated: 0, errors: [String(salesErr)], uploadId: '',
-          };
-        }
-      }
-
       await invalidateCaches();
-      setState((prev) => ({ ...prev, step: 'summary', result: res.result, salesResult }));
+      setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
     } catch (err) {
       await handleBatchError(err);
     }
@@ -212,25 +214,8 @@ export default function UploadCenter() {
       });
 
       if (res.status === 'success') {
-        // Run Sales Log import if present (optional slot)
-        let salesResult: SalesImportResult | null = null;
-        if (state.salesLog?.file) {
-          try {
-            salesResult = await importSalesLog(
-              state.salesLog.file,
-              agencyId,
-              state.uploadDate,
-              'batch_import',
-            );
-          } catch (salesErr) {
-            salesResult = {
-              totalRows: 0, imported: 0, filtered: 0,
-              newLeadsCreated: 0, errors: [String(salesErr)], uploadId: '',
-            };
-          }
-        }
         await invalidateCaches();
-        setState((prev) => ({ ...prev, step: 'summary', result: res.result, salesResult }));
+        setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
       }
     } catch (err) {
       await handleBatchError(err);
@@ -253,7 +238,7 @@ export default function UploadCenter() {
     setState(initialState);
   };
 
-  const totalFiles = state.salesLog ? 4 : 3;
+  const totalFiles = 3;
   const progressPct = state.progress
     ? Math.min(
         100,
@@ -284,6 +269,7 @@ export default function UploadCenter() {
 
       {/* ── Step: Select Files ────────────────────────────────────────────── */}
       {state.step === 'select' && (
+        <>
         <div className="max-w-3xl">
           <div className="grid grid-cols-2 gap-4 mb-6">
             <div>
@@ -307,7 +293,7 @@ export default function UploadCenter() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <section>
               <h3 className="text-sm font-semibold mb-2">
                 1. Ricochet Lead List{' '}
@@ -345,18 +331,6 @@ export default function UploadCenter() {
               />
             </section>
 
-            <section>
-              <h3 className="text-sm font-semibold mb-2">
-                4. Sales Log{' '}
-                <span className="text-muted-foreground font-normal">(optional)</span>
-              </h3>
-              <BatchDropSlot
-                expectedType={REPORT_TYPES.SALES_LOG}
-                label="Sales Log"
-                value={state.salesLog}
-                onChange={(v) => setState((prev) => ({ ...prev, salesLog: v }))}
-              />
-            </section>
           </div>
 
           {!agencyId && (
@@ -376,7 +350,6 @@ export default function UploadCenter() {
                 !state.ricochet.typeMatches ||
                 !state.dailyCall.typeMatches ||
                 !state.deerDama.typeMatches ||
-                (state.salesLog != null && !state.salesLog.typeMatches) ||
                 !state.uploadDate
               }
             >
@@ -384,12 +357,69 @@ export default function UploadCenter() {
             </Button>
           </div>
         </div>
+
+        {/* ── Independent Sales Log Upload ─────────────────────────────── */}
+        <div className="max-w-3xl mt-8 border rounded-lg bg-card p-5">
+          <h2 className="text-base font-semibold text-foreground mb-1">Sales Log Upload</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            Upload a Sales Log CSV at any time — independent of the daily batch.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="text-sm font-medium text-foreground mb-1.5 block">Upload Date</label>
+              <input
+                type="date"
+                value={salesDate}
+                onChange={(e) => setSalesDate(e.target.value)}
+                className="w-full bg-background border rounded-md px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <BatchDropSlot
+            expectedType={REPORT_TYPES.SALES_LOG}
+            label="Sales Log"
+            value={salesSlot}
+            onChange={(v) => { setSalesSlot(v); setSalesResult(null); setSalesError(null); }}
+          />
+          {salesError && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-md">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {salesError}
+            </div>
+          )}
+          {salesResult && (
+            <div className="mt-3 rounded-md border border-success/50 bg-success/10 p-3 space-y-1 text-sm">
+              <div className="flex items-center gap-2 text-success font-medium mb-1">
+                <CheckCircle2 className="w-4 h-4" /> Sales Log imported successfully
+              </div>
+              <p className="text-muted-foreground">{salesResult.imported} policy rows imported</p>
+              <p className="text-muted-foreground">{salesResult.newLeadsCreated} new re-quote leads created from unmatched sales</p>
+              <p className="text-muted-foreground">{salesResult.filtered} rows filtered (non-Beacon Territory)</p>
+              {salesResult.errors.length > 0 && (
+                <p className="text-destructive">{salesResult.errors.length} errors</p>
+              )}
+            </div>
+          )}
+          <div className="mt-4 flex justify-end">
+            <Button
+              onClick={runSalesImport}
+              disabled={!salesSlot || !salesSlot.typeMatches || salesImporting || !agencyId}
+            >
+              {salesImporting ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Importing…</>
+              ) : (
+                'Import Sales Log'
+              )}
+            </Button>
+          </div>
+        </div>
+        </>
       )}
 
       {/* ── Step: Preview ─────────────────────────────────────────────────── */}
       {state.step === 'preview' && (
         <div className="max-w-4xl space-y-8">
-          {(['ricochet', 'dailyCall', 'deerDama', 'salesLog'] as const).map((key) => {
+          {(['ricochet', 'dailyCall', 'deerDama'] as const).map((key) => {
             const slot = state[key];
             if (!slot) return null;
             const label =
@@ -397,8 +427,6 @@ export default function UploadCenter() {
                 ? 'Ricochet Lead List'
                 : key === 'dailyCall'
                 ? 'Daily Call Report'
-                : key === 'salesLog'
-                ? 'Sales Log'
                 : 'Deer Dama (Lead) Report';
             return (
               <div key={key}>
@@ -561,17 +589,7 @@ export default function UploadCenter() {
                   },
                 ]}
               />
-              {state.salesResult && (
-                <SummaryBlock
-                  title="Sales Log"
-                  rows={[
-                    { icon: 'success', text: `${state.salesResult.imported} policy rows imported` },
-                    { icon: 'success', text: `${state.salesResult.newLeadsCreated} new re-quote leads created` },
-                    { icon: 'info', text: `${state.salesResult.filtered} rows filtered (non-Beacon Territory)` },
-                    { icon: 'warn', text: `${state.salesResult.errors.length} errors` },
-                  ]}
-                />
-              )}
+
             </div>
           )}
 
