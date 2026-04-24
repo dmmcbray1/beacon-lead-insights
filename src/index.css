@@ -13,7 +13,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 220 25% 10%;
 
-    --primary: 215 72% 40%;
+    --primary: 211 39% 20%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 220 14% 92%;
@@ -22,37 +22,37 @@
     --muted: 220 14% 94%;
     --muted-foreground: 220 10% 40%;
 
-    --accent: 38 92% 50%;
-    --accent-foreground: 38 95% 14%;
+    --accent: 41 54% 54%;
+    --accent-foreground: 211 39% 15%;
 
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
 
     --border: 220 13% 88%;
     --input: 220 13% 88%;
-    --ring: 215 72% 40%;
+    --ring: 211 39% 20%;
 
     --radius: 0.5rem;
 
     --success: 152 60% 40%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 50%;
-    --warning-foreground: 38 95% 14%;
+    --warning: 41 54% 54%;
+    --warning-foreground: 211 39% 15%;
 
-    --sidebar-background: 220 25% 12%;
-    --sidebar-foreground: 220 10% 80%;
-    --sidebar-primary: 215 72% 55%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 220 20% 18%;
-    --sidebar-accent-foreground: 220 10% 90%;
-    --sidebar-border: 220 20% 20%;
-    --sidebar-ring: 215 72% 55%;
-    --sidebar-muted: 220 10% 46%;
+    --sidebar-background: 211 39% 15%;
+    --sidebar-foreground: 211 15% 80%;
+    --sidebar-primary: 41 54% 54%;
+    --sidebar-primary-foreground: 211 39% 10%;
+    --sidebar-accent: 211 30% 22%;
+    --sidebar-accent-foreground: 0 0% 95%;
+    --sidebar-border: 211 30% 25%;
+    --sidebar-ring: 41 54% 54%;
+    --sidebar-muted: 211 15% 60%;
 
-    --kpi-leads: 215 72% 40%;
+    --kpi-leads: 211 39% 30%;
     --kpi-contacts: 152 60% 40%;
-    --kpi-quotes: 38 92% 50%;
+    --kpi-quotes: 41 54% 54%;
     --kpi-callbacks: 270 55% 50%;
     --kpi-voicemails: 200 70% 44%;
     --kpi-bad: 0 72% 51%;
@@ -70,8 +70,8 @@
     --popover: 220 20% 12%;
     --popover-foreground: 220 10% 92%;
 
-    --primary: 215 72% 62%;
-    --primary-foreground: 220 20% 9%;
+    --primary: 211 50% 60%;
+    --primary-foreground: 211 39% 10%;
 
     --secondary: 220 20% 17%;
     --secondary-foreground: 220 10% 82%;
@@ -79,25 +79,25 @@
     --muted: 220 20% 14%;
     --muted-foreground: 220 10% 58%;
 
-    --accent: 38 92% 55%;
-    --accent-foreground: 38 95% 10%;
+    --accent: 41 58% 62%;
+    --accent-foreground: 211 39% 10%;
 
     --destructive: 0 72% 58%;
     --destructive-foreground: 0 0% 100%;
 
     --border: 220 20% 20%;
     --input: 220 20% 20%;
-    --ring: 215 72% 62%;
+    --ring: 211 50% 60%;
 
     --success: 152 55% 52%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 55%;
-    --warning-foreground: 38 95% 10%;
+    --warning: 41 58% 62%;
+    --warning-foreground: 211 39% 10%;
 
-    --kpi-leads: 215 72% 62%;
+    --kpi-leads: 211 50% 60%;
     --kpi-contacts: 152 55% 52%;
-    --kpi-quotes: 38 92% 58%;
+    --kpi-quotes: 41 58% 62%;
     --kpi-callbacks: 270 55% 68%;
     --kpi-voicemails: 200 70% 62%;
     --kpi-bad: 0 72% 62%;

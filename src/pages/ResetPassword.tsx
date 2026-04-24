@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, Eye, EyeOff, Lock, Phone } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -101,16 +101,12 @@ export default function ResetPassword() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm animate-fade-in">
-        <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
-            <Phone className="w-5 h-5 text-primary-foreground" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-foreground tracking-tight" style={{ lineHeight: 1.2 }}>
-              Beacon Call
-            </h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Dashboard</p>
-          </div>
+        <div className="flex items-center justify-center mb-8">
+          <img
+            src="/beacon-logo.png"
+            alt="Beacon Territory Group"
+            className="h-28 w-auto object-contain"
+          />
         </div>
 
         <div className="bg-card border rounded-xl p-6 shadow-sm">

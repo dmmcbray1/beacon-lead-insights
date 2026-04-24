@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, Users, Building2, Search,
-  Settings, Phone, LogOut, ShieldCheck, Moon, Sun, UserCog,
+  Settings, LogOut, ShieldCheck, Moon, Sun, UserCog,
   DollarSign, TrendingUp
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
@@ -37,14 +37,12 @@ export default function AppSidebar() {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 w-60 bg-sidebar flex flex-col">
       {/* Logo */}
-      <div className="flex items-center gap-2.5 px-5 h-16 border-b border-sidebar-border">
-        <div className="w-8 h-8 rounded-lg bg-sidebar-primary flex items-center justify-center">
-          <Phone className="w-4 h-4 text-sidebar-primary-foreground" />
-        </div>
-        <div>
-          <h1 className="text-sm font-bold text-sidebar-accent-foreground tracking-tight">Beacon Call</h1>
-          <p className="text-[10px] text-sidebar-muted uppercase tracking-widest">Dashboard</p>
-        </div>
+      <div className="flex items-center justify-center px-4 h-24 bg-white border-b border-sidebar-border">
+        <img
+          src="/beacon-logo.png"
+          alt="Beacon Territory Group"
+          className="max-h-full max-w-full object-contain"
+        />
       </div>
 
       {/* Navigation */}
