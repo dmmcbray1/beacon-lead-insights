@@ -28,10 +28,13 @@ interface Props {
 }
 
 function detectReportType(columns: string[]): string {
-  const lowered = columns.map((c) => c.toLowerCase());
-  const dailyMatch = lowered.filter((c) => (DAILY_CALL_COLUMNS as readonly string[]).includes(c)).length;
-  const deerMatch  = lowered.filter((c) => (DEER_DAMA_COLUMNS as readonly string[]).includes(c)).length;
-  const ricoMatch  = lowered.filter((c) => (RICOCHET_COLUMNS as readonly string[]).includes(c)).length;
+  // Case-insensitive match on both sides: the incoming file columns are
+  // lowercased, and so are the expected-column constants (DAILY_CALL and
+  // DEER_DAMA are authored in Title Case; RICOCHET is already lowercase).
+  const incoming = new Set(columns.map((c) => c.toLowerCase().trim()));
+  const dailyMatch = DAILY_CALL_COLUMNS.filter((c) => incoming.has(c.toLowerCase())).length;
+  const deerMatch  = DEER_DAMA_COLUMNS.filter((c) => incoming.has(c.toLowerCase())).length;
+  const ricoMatch  = RICOCHET_COLUMNS.filter((c) => incoming.has(c.toLowerCase())).length;
 
   // Pick the highest-scoring type that also meets the ≥5 threshold.
   // Ties broken in favor of Ricochet, then Deer Dama, then Daily Call
