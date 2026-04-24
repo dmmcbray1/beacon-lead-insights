@@ -572,7 +572,11 @@ export async function importDailyCallReport(
   });
   const rowsSkippedUnmatched = unmatchedErrors.length;
 
-  // Per-lead accumulated state for leads we're updating this run
+  // Per-lead accumulated state for leads we're updating this run.
+  // After the phone_not_in_leads filter above, every phone in matchedRows
+  // already has a corresponding row in existingMap — so there is no "new
+  // lead" branch here. Ricochet (Phase 0) is the authoritative source of
+  // new leads.
   type LeadState = {
     id: string;
     total_call_attempts: number;
@@ -589,7 +593,6 @@ export async function importDailyCallReport(
     current_status: string;
     current_lead_type: string;
     latest_vendor_name: string;
-    isNew: boolean;
   };
 
   const leadStates = new Map<string, LeadState>();
@@ -607,48 +610,26 @@ export async function importDailyCallReport(
   }
 
   for (const vr of matchedRows) {
-    const existing = existingMap.get(vr.phone);
+    const existing = existingMap.get(vr.phone)!;
 
     if (!leadStates.has(vr.phone)) {
-      if (existing) {
-        leadStates.set(vr.phone, {
-          id: existing.id,
-          total_call_attempts: existing.total_call_attempts ?? 0,
-          total_callbacks: existing.total_callbacks ?? 0,
-          total_voicemails: existing.total_voicemails ?? 0,
-          has_bad_phone: existing.has_bad_phone ?? false,
-          first_seen_date: existing.first_seen_date,
-          first_contact_date: existing.first_contact_date,
-          first_callback_date: existing.first_callback_date,
-          first_quote_date: existing.first_quote_date,
-          first_sold_date: existing.first_sold_date,
-          first_daily_call_date: existing.first_daily_call_date,
-          latest_call_date: existing.latest_call_date,
-          current_status: vr.currentStatus,
-          current_lead_type: vr.leadType,
-          latest_vendor_name: vr.hint,
-          isNew: false,
-        });
-      } else {
-        leadStates.set(vr.phone, {
-          id: '', // filled after insert
-          total_call_attempts: 0,
-          total_callbacks: 0,
-          total_voicemails: 0,
-          has_bad_phone: false,
-          first_seen_date: vr.callDateStr,
-          first_contact_date: null,
-          first_callback_date: null,
-          first_quote_date: null,
-          first_sold_date: null,
-          first_daily_call_date: vr.callDateStr,
-          latest_call_date: vr.callDateStr,
-          current_status: vr.currentStatus,
-          current_lead_type: vr.leadType,
-          latest_vendor_name: vr.hint,
-          isNew: true,
-        });
-      }
+      leadStates.set(vr.phone, {
+        id: existing.id,
+        total_call_attempts: existing.total_call_attempts ?? 0,
+        total_callbacks: existing.total_callbacks ?? 0,
+        total_voicemails: existing.total_voicemails ?? 0,
+        has_bad_phone: existing.has_bad_phone ?? false,
+        first_seen_date: existing.first_seen_date,
+        first_contact_date: existing.first_contact_date,
+        first_callback_date: existing.first_callback_date,
+        first_quote_date: existing.first_quote_date,
+        first_sold_date: existing.first_sold_date,
+        first_daily_call_date: existing.first_daily_call_date,
+        latest_call_date: existing.latest_call_date,
+        current_status: vr.currentStatus,
+        current_lead_type: vr.leadType,
+        latest_vendor_name: vr.hint,
+      });
     }
 
     const state = leadStates.get(vr.phone)!;
@@ -673,69 +654,15 @@ export async function importDailyCallReport(
     }
   }
 
-  // ── Phase 3: Insert new leads ─────────────────────────────────────────────
-  // After the phone_not_in_leads filter above, every phone in `matchedRows`
-  // is already present in `existingMap`, so no new leads should be created
-  // here. This loop is retained as a safety net; it will iterate zero times
-  // under normal orchestrator-driven flow.
+  // Ricochet (Phase 0) is the only source of new leads — Daily Call never
+  // inserts into `leads`. Rows without a matching phone were already dropped
+  // in Phase 2b above.
+  const newLeads = 0;
 
-  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: matchedRows.length });
-
-  let newLeads = 0;
-  const newPhones = [...leadStates.entries()].filter(([, s]) => s.isNew).map(([p]) => p);
-
-  if (newPhones.length > 0) {
-    // Insert in batches of 100
-    const BATCH = 100;
-    for (let i = 0; i < newPhones.length; i += BATCH) {
-      const batch = newPhones.slice(i, i + BATCH);
-      const inserts = batch.map((phone) => {
-        const s = leadStates.get(phone)!;
-        return {
-          agency_id: agencyId,
-          normalized_phone: phone,
-          raw_phone: phone,
-          current_lead_type: s.current_lead_type,
-          current_status: s.current_status,
-          first_seen_date: s.first_seen_date,
-          first_daily_call_date: s.first_daily_call_date,
-          latest_call_date: s.latest_call_date,
-          latest_vendor_name: s.latest_vendor_name,
-          total_call_attempts: s.total_call_attempts,
-          total_callbacks: s.total_callbacks,
-          total_voicemails: s.total_voicemails,
-          has_bad_phone: s.has_bad_phone,
-          first_contact_date: s.first_contact_date,
-          first_callback_date: s.first_callback_date,
-          first_quote_date: s.first_quote_date,
-          first_sold_date: s.first_sold_date,
-        };
-      });
-
-      const { data: created, error: createErr } = await supabase
-        .from('leads')
-        .insert(inserts)
-        .select('id, normalized_phone');
-
-      if (createErr) {
-        errors.push(`Batch insert error: ${createErr.message}`);
-        continue;
-      }
-
-      for (const row of created ?? []) {
-        const state = leadStates.get(row.normalized_phone);
-        if (state) {
-          state.id = row.id;
-          newLeads++;
-        }
-      }
-    }
-  }
-
-  // ── Phase 4: Update existing leads ────────────────────────────────────────
+  // ── Phase 3: Update existing leads ────────────────────────────────────────
 
   let updatedLeads = 0;
-  const toUpdate = [...leadStates.entries()].filter(([, s]) => !s.isNew && s.id);
+  const toUpdate = [...leadStates.entries()];
 
   for (const [, state] of toUpdate) {
     const { error } = await supabase
@@ -761,7 +688,7 @@ export async function importDailyCallReport(
     else errors.push(`Failed to update lead ${state.id}: ${error.message}`);
   }
 
-  // ── Phase 5: Insert call_events ───────────────────────────────────────────
+  // ── Phase 4: Insert call_events ───────────────────────────────────────────
 
   onProgress?.({ phase: 'Saving call events…', processed: 0, total: matchedRows.length });
 
