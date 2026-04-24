@@ -7,7 +7,7 @@ import FlipKPICard from '@/components/FlipKPICard';
 import FilterBar from '@/components/FilterBar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatPercent, formatNumber } from '@/lib/metrics';
-import { useKPIs, useContactTiming, useCallQuality, useDailyTrends, useSoldSummary, type Filters } from '@/hooks/useLeadData';
+import { useKPIs, useContactTiming, useCallQuality, useDailyTrends, useSoldSummary, useTotalCallMetrics, type Filters } from '@/hooks/useLeadData';
 
 export default function Dashboard() {
   const [filters, setFilters] = useState<Filters>({
@@ -26,6 +26,7 @@ export default function Dashboard() {
   const { data: callQuality } = useCallQuality(filters);
   const { data: dailyTrends } = useDailyTrends(filters);
   const { data: soldSummary } = useSoldSummary(filters);
+  const { data: totalCalls } = useTotalCallMetrics(filters);
 
   const nb = kpis?.newBreakdown;
   const rb = kpis?.reQuoteBreakdown;
@@ -46,8 +47,8 @@ export default function Dashboard() {
       color: 'hsl(var(--kpi-leads))',
       breakdownRows: [
         { label: 'Total Leads', newValue: formatNumber(nb.leads), reQuoteValue: formatNumber(rb.leads) },
-        { label: 'Total Calls Made', newValue: formatNumber(callQuality?.totalCallsMade ?? 0), reQuoteValue: '—' },
-        { label: 'Total Inbound Calls', newValue: formatNumber(callQuality?.totalInboundCalls ?? 0), reQuoteValue: '—' },
+        { label: 'Total Calls Made', newValue: formatNumber(totalCalls?.totalCallsMade ?? callQuality?.totalCallsMade ?? 0), reQuoteValue: '—' },
+        { label: 'Total Inbound Calls', newValue: formatNumber(totalCalls?.totalInbound ?? callQuality?.totalInboundCalls ?? 0), reQuoteValue: '—' },
       ],
     },
     {
@@ -261,8 +262,8 @@ export default function Dashboard() {
                       className="h-full rounded-full transition-all duration-500"
                       style={{
                         width: `${Math.min(100, row.pct)}%`,
-                        backgroundColor: row.label === 'Other' ? 'hsl(var(--kpi-bad))' : row.label === 'Callback (Inbound)' ? 'hsl(270,55%,50%)' : 'hsl(var(--kpi-leads))',
-                        opacity: row.label === 'Other' ? 0.7 : 1,
+                        backgroundColor: row.label === 'No Match' ? 'hsl(var(--kpi-bad))' : 'hsl(var(--kpi-leads))',
+                        opacity: row.label === 'No Match' ? 0.7 : 1,
                       }}
                     />
                   </div>

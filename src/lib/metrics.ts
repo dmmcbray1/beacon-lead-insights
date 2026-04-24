@@ -43,6 +43,16 @@ export interface LeadRecord {
   call_type: string | null;
   /** The Vendor Name column value */
   vendor_name: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  street_address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  campaign?: string | null;
+  lead_date?: string | null;
+  lead_cost?: number | null;
 }
 
 // ---------------------------------------------------------------------------

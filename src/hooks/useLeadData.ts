@@ -157,6 +157,16 @@ function toLeadRecord(lead: LeadRow): LeadRecord {
     statuses: buildStatuses(lead),
     call_type: buildCallType(lead),
     vendor_name: lead.latest_vendor_name,
+    first_name: lead.first_name,
+    last_name: lead.last_name,
+    email: lead.email,
+    street_address: lead.street_address,
+    city: lead.city,
+    state: lead.state,
+    zip: lead.zip,
+    campaign: lead.campaign,
+    lead_date: lead.lead_date,
+    lead_cost: lead.lead_cost,
   };
 }
 
@@ -271,6 +281,49 @@ export interface ContactTimingRow {
   pct: number;
 }
 
+// 9.5x call_type suffixes → day-bucket labels.
+// Order matters: longer suffixes first so "9.5a" doesn't match the bare "9.5" rule.
+const CALL_TYPE_BUCKETS: { label: string; suffix: string }[] = [
+  { label: 'Day 22–30', suffix: '9.5i' },
+  { label: 'Day 15–21', suffix: '9.5h' },
+  { label: 'Day 8–14',  suffix: '9.5g' },
+  { label: 'Day 7',     suffix: '9.5f' },
+  { label: 'Day 6',     suffix: '9.5e' },
+  { label: 'Day 5',     suffix: '9.5d' },
+  { label: 'Day 4',     suffix: '9.5c' },
+  { label: 'Day 3',     suffix: '9.5b' },
+  { label: 'Day 2',     suffix: '9.5a' },
+  { label: 'Day 1',     suffix: '9.5'  },
+];
+
+const CONTACT_TIMING_BUCKET_LABELS = [
+  'Day 1','Day 2','Day 3','Day 4','Day 5','Day 6','Day 7',
+  'Day 8–14','Day 15–21','Day 22–30','No Match',
+];
+
+function parseCallTypeBucket(callType: string | null | undefined): string {
+  if (!callType) return 'No Match';
+  const ct = callType.toLowerCase();
+  for (const b of CALL_TYPE_BUCKETS) {
+    if (ct.includes(b.suffix)) return b.label;
+  }
+  return 'No Match';
+}
+
+function calcContactTimingFromCallTypes(callTypes: (string | null | undefined)[]): ContactTimingRow[] {
+  const counts = new Map<string, number>(CONTACT_TIMING_BUCKET_LABELS.map(l => [l, 0]));
+  for (const ct of callTypes) {
+    const bucket = parseCallTypeBucket(ct);
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+  const total = callTypes.length;
+  return CONTACT_TIMING_BUCKET_LABELS.map(l => ({
+    label: l,
+    count: counts.get(l) ?? 0,
+    pct: total > 0 ? ((counts.get(l) ?? 0) / total) * 100 : 0,
+  }));
+}
+
 export function useContactTiming(filters: Filters) {
   const { agencyId, isAdmin } = useAuth();
   const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
@@ -282,7 +335,7 @@ export function useContactTiming(filters: Filters) {
 
       let q = supabase
         .from('call_events')
-        .select('lead_id, call_date, call_type, call_direction')
+        .select('lead_id, call_date, call_type')
         .eq('is_contact', true)
         .order('call_date', { ascending: true })
         .limit(100000);
@@ -294,47 +347,16 @@ export function useContactTiming(filters: Filters) {
       const { data, error } = await q;
       if (error) throw error;
 
-      // Take first contact call per lead
-      const firstContactByLead = new Map<string, { call_type: string | null; call_direction: string | null }>();
+      // First contact (earliest call_date) per lead. Results are ordered asc, so
+      // the first row seen per lead_id is the earliest.
+      const firstContactByLead = new Map<string, string>();
       for (const ev of data ?? []) {
         if (!firstContactByLead.has(ev.lead_id)) {
-          firstContactByLead.set(ev.lead_id, { call_type: ev.call_type, call_direction: ev.call_direction });
+          firstContactByLead.set(ev.lead_id, ev.call_type ?? '');
         }
       }
 
-      function classifyCallType(callType: string | null, direction: string | null): string {
-        if (!callType) return 'Other';
-        const ct = callType.toLowerCase();
-        if (direction === 'inbound' || ct.startsWith('inbound')) return 'Callback (Inbound)';
-        if (ct.includes('day 1') || ct.startsWith('9.5:') || ct.includes('day 1 ') || ct.includes('only  day 1')) return 'Day 1';
-        if (ct.includes('day 2') || ct.startsWith('9.5a')) return 'Day 2';
-        if (ct.includes('day 3') || ct.startsWith('9.5b')) return 'Day 3';
-        if (ct.includes('day 4') || ct.startsWith('9.5c')) return 'Day 4';
-        if (ct.includes('day 5') || ct.startsWith('9.5d')) return 'Day 5';
-        if (ct.includes('day 6') || ct.startsWith('9.5e')) return 'Day 6';
-        if (ct.includes('day 7') || ct.startsWith('9.5f')) return 'Day 7';
-        if (ct.includes('day 8') || ct.startsWith('9.5g')) return 'Day 8-13';
-        if (ct.includes('day 14') || ct.startsWith('9.5h')) return 'Day 14-21';
-        if (ct.includes('day 22') || ct.startsWith('9.5i')) return 'Day 22-30';
-        return 'Other';
-      }
-
-      const bucketLabels = ['Day 1','Day 2','Day 3','Day 4','Day 5','Day 6','Day 7','Day 8-13','Day 14-21','Day 22-30','Callback (Inbound)','Other'];
-      const counts = new Map<string, number>(bucketLabels.map(l => [l, 0]));
-
-      for (const { call_type, call_direction } of firstContactByLead.values()) {
-        const bucket = classifyCallType(call_type, call_direction);
-        counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
-      }
-
-      const total = firstContactByLead.size;
-      return bucketLabels
-        .filter(l => (counts.get(l) ?? 0) > 0)
-        .map(l => ({
-          label: l,
-          count: counts.get(l) ?? 0,
-          pct: total > 0 ? ((counts.get(l) ?? 0) / total) * 100 : 0,
-        }));
+      return calcContactTimingFromCallTypes([...firstContactByLead.values()]);
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,
@@ -1055,6 +1077,45 @@ export function useROIData(filters: Filters) {
       }).sort((a, b) => b.spend - a.spend);
 
       return { metrics, byCampaign };
+    },
+    enabled: isAdmin ? true : !!agencyId,
+    staleTime: 30_000,
+  });
+}
+
+// ─── Total call metrics (dashboard KPI tiles) ─────────────────────────────────────
+
+export interface TotalCallMetrics {
+  totalCallsMade: number;
+  totalInbound: number;
+}
+
+export function useTotalCallMetrics(filters: Filters) {
+  const { agencyId, isAdmin } = useAuth();
+  const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
+
+  return useQuery({
+    queryKey: ['totalCallMetrics', filters, effectiveAgencyId],
+    queryFn: async (): Promise<TotalCallMetrics> => {
+      const { from, to } = getDateBounds(filters);
+
+      let q = supabase
+        .from('call_events')
+        .select('call_direction')
+        .limit(200000);
+
+      if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+      if (from) q = q.gte('call_date', from);
+      if (to) q = q.lte('call_date', to + 'T23:59:59');
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const rows = data ?? [];
+      return {
+        totalCallsMade: rows.length,
+        totalInbound: rows.filter(r => r.call_direction === 'inbound').length,
+      };
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,
