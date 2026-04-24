@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckCircle2, AlertTriangle, Loader2, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -660,13 +660,13 @@ function SkippedRowsModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset + fetch whenever the upload changes.
-  useMemo(() => {
+  useEffect(() => {
     if (!open || !uploadId) {
       setRows(null);
       setError(null);
       return;
     }
+    let cancelled = false;
     setLoading(true);
     setError(null);
     supabase
@@ -676,6 +676,7 @@ function SkippedRowsModal({
       .eq('error_type', 'phone_not_in_leads')
       .order('row_number', { ascending: true })
       .then(({ data, error: qerr }) => {
+        if (cancelled) return;
         if (qerr) {
           setError(qerr.message);
           setRows(null);
@@ -690,6 +691,9 @@ function SkippedRowsModal({
         }
         setLoading(false);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [open, uploadId]);
 
   const downloadCsv = () => {
