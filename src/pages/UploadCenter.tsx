@@ -117,7 +117,7 @@ export default function UploadCenter() {
     setSalesResult(null);
     setSalesError(null);
     try {
-      const result = await importSalesLog(salesSlot.file, agencyId, salesDate, 'standalone');
+      const result = await importSalesLog(salesSlot.file, agencyId, salesDate, null);
       setSalesResult(result);
       await queryClient.invalidateQueries({ queryKey: ['uploads'] });
       await queryClient.invalidateQueries({ queryKey: ['leads'] });

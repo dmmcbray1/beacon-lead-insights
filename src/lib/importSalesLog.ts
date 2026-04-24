@@ -131,7 +131,7 @@ export async function importSalesLog(
   file: File,
   agencyId: string,
   uploadDate: string,
-  uploadedBy: string,
+  uploadedBy: string | null,
   onProgress?: (p: ImportProgress) => void,
 ): Promise<ImportResult> {
   const errors: string[] = [];
