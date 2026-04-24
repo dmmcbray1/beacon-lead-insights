@@ -6,6 +6,7 @@ import {
   DAILY_CALL_COLUMNS,
   DEER_DAMA_COLUMNS,
   RICOCHET_COLUMNS,
+  SALES_LOG_COLUMNS,
   REPORT_TYPES,
 } from '@/lib/constants';
 
@@ -18,7 +19,7 @@ export interface BatchDropSlotValue {
 }
 
 interface Props {
-  expectedType: typeof REPORT_TYPES.DAILY_CALL | typeof REPORT_TYPES.DEER_DAMA | typeof REPORT_TYPES.RICOCHET_LEAD_LIST;
+  expectedType: typeof REPORT_TYPES.DAILY_CALL | typeof REPORT_TYPES.DEER_DAMA | typeof REPORT_TYPES.RICOCHET_LEAD_LIST | typeof REPORT_TYPES.SALES_LOG;
   disabled?: boolean;
   disabledHelperText?: string;
   label: string;
@@ -40,10 +41,13 @@ function detectReportType(columns: string[]): string {
   // Ties broken in favor of Ricochet, then Deer Dama, then Daily Call
   // (Ricochet has the most unique columns, so a real Ricochet file will
   // always out-score the other types).
+  const salesMatch = SALES_LOG_COLUMNS.filter((c) => incoming.has(c.toLowerCase())).length;
+
   const scores: Array<[number, string]> = [
     [ricoMatch, REPORT_TYPES.RICOCHET_LEAD_LIST],
     [deerMatch, REPORT_TYPES.DEER_DAMA],
     [dailyMatch, REPORT_TYPES.DAILY_CALL],
+    [salesMatch, REPORT_TYPES.SALES_LOG],
   ];
   const [topScore, topType] = scores.reduce((best, cur) =>
     cur[0] > best[0] ? cur : best

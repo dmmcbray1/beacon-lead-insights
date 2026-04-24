@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Upload, Users, Building2, Search,
-  Settings, Phone, LogOut, ShieldCheck, Moon, Sun
+  Settings, Phone, LogOut, ShieldCheck, Moon, Sun, UserCog,
+  DollarSign, TrendingUp
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -23,6 +24,9 @@ export default function AppSidebar() {
     { name: 'Upload Center', href: '/upload', icon: Upload, adminOnly: false },
     { name: 'Lead Explorer', href: '/leads', icon: Search, adminOnly: false },
     { name: 'Staff Performance', href: '/staff', icon: Users, adminOnly: false },
+    { name: 'Sales Tracking', href: '/sales', icon: DollarSign, adminOnly: false },
+    { name: 'ROI Tracking', href: '/roi', icon: TrendingUp, adminOnly: false },
+    { name: 'Staff Mgmt', href: '/staff-management', icon: UserCog, adminOnly: false },
     { name: 'Agency Performance', href: '/agency', icon: Building2, adminOnly: true },
     { name: 'User Management', href: '/admin/users', icon: ShieldCheck, adminOnly: true },
     { name: 'Admin', href: '/admin', icon: Settings, adminOnly: true },

@@ -61,6 +61,8 @@ export default function Dashboard() {
         { label: 'Voicemails Left', newValue: formatNumber(nb.voicemailLeads), reQuoteValue: formatNumber(rb.voicemailLeads) },
         { label: 'Voicemail Rate', newValue: formatPercent(nb.voicemailRate), reQuoteValue: formatPercent(rb.voicemailRate) },
         { label: '% of Outbound Calls', newValue: formatPercent(callQuality?.voicemailCallRate ?? 0), reQuoteValue: '—' },
+        { label: 'Calls > 5 Min', newValue: formatNumber(callQuality?.callsOver5Min ?? 0), reQuoteValue: '—' },
+        { label: '% Calls > 5 Min', newValue: formatPercent(callQuality?.callsOver5MinRate ?? 0), reQuoteValue: '—' },
         { label: 'Callbacks', newValue: formatNumber(nb.callbacks), reQuoteValue: formatNumber(rb.callbacks) },
         { label: 'CB w/ Voicemail', newValue: formatNumber(nb.voicemailCallbacks), reQuoteValue: formatNumber(rb.voicemailCallbacks) },
         { label: 'CB w/o Voicemail', newValue: formatNumber(nb.nonVoicemailCallbacks), reQuoteValue: formatNumber(rb.nonVoicemailCallbacks) },
@@ -94,7 +96,8 @@ export default function Dashboard() {
       color: 'hsl(var(--kpi-contacts))',
       breakdownRows: [
         { label: 'Sold', newValue: formatNumber(nb.sold), reQuoteValue: formatNumber(rb.sold) },
-        { label: 'Qt → Sold Rate', newValue: formatPercent(nb.quotedToSoldRate), reQuoteValue: formatPercent(rb.quotedToSoldRate) },
+        { label: 'Sold Rate (of Leads)', newValue: formatPercent(nb.leads > 0 ? nb.sold / nb.leads : 0), reQuoteValue: formatPercent(rb.leads > 0 ? rb.sold / rb.leads : 0) },
+        { label: 'Close Rate (Qt→Sold)', newValue: formatPercent(nb.quotedToSoldRate), reQuoteValue: formatPercent(rb.quotedToSoldRate) },
         { label: 'Avg Days to Sold (Seen)', newValue: nb.avgDaysToSoldFromSeen.toFixed(1), reQuoteValue: rb.avgDaysToSoldFromSeen.toFixed(1) },
         { label: 'Avg Days to Sold (Contact)', newValue: nb.avgDaysToSoldFromContact.toFixed(1), reQuoteValue: rb.avgDaysToSoldFromContact.toFixed(1) },
         { label: 'Qt → Sold Days', newValue: nb.avgDaysQuoteToSold.toFixed(1), reQuoteValue: rb.avgDaysQuoteToSold.toFixed(1) },
@@ -111,6 +114,8 @@ export default function Dashboard() {
         { label: 'Bad Phone Count', newValue: formatNumber(nb.badPhoneCount), reQuoteValue: formatNumber(rb.badPhoneCount) },
         { label: 'Bad Phone %', newValue: formatPercent(nb.badPhoneRate), reQuoteValue: formatPercent(rb.badPhoneRate) },
         { label: 'Stale Pipeline (7d+)', newValue: formatNumber(nb.stalePipelineCount), reQuoteValue: formatNumber(rb.stalePipelineCount) },
+        { label: 'Do Not Call', newValue: formatNumber(nb.doNotCallCount), reQuoteValue: formatNumber(rb.doNotCallCount) },
+        { label: 'DNC Rate', newValue: formatPercent(nb.doNotCallRate), reQuoteValue: formatPercent(rb.doNotCallRate) },
       ],
     },
   ] : [];
@@ -292,6 +297,8 @@ export default function Dashboard() {
                   { label: 'Stale Pipeline (7d+)',     nv: formatNumber(nb.stalePipelineCount),       rv: formatNumber(rb.stalePipelineCount) },
                   { label: 'Bad Phone Count',          nv: formatNumber(nb.badPhoneCount),            rv: formatNumber(rb.badPhoneCount) },
                   { label: 'Bad Phone %',              nv: formatPercent(nb.badPhoneRate),            rv: formatPercent(rb.badPhoneRate) },
+                  { label: 'Do Not Call',              nv: formatNumber(nb.doNotCallCount),           rv: formatNumber(rb.doNotCallCount) },
+                  { label: 'DNC Rate',                 nv: formatPercent(nb.doNotCallRate),           rv: formatPercent(rb.doNotCallRate) },
                 ].map((row, i) => (
                   <tr key={row.label} className={i % 2 === 1 ? 'bg-secondary/20' : ''}>
                     <td className="py-2.5 pr-4 text-foreground">{row.label}</td>

@@ -14,6 +14,9 @@ import StaffPerformance from "./pages/StaffPerformance";
 import AgencyPerformance from "./pages/AgencyPerformance";
 import Admin from "./pages/Admin";
 import UserManagement from "./pages/UserManagement";
+import StaffManagement from "./pages/StaffManagement";
+import SalesTracking from "./pages/SalesTracking";
+import ROITracking from "./pages/ROITracking";
 import Login from "./pages/Login";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
@@ -38,6 +41,9 @@ const App = () => (
               <Route path="/agency" element={<AdminRoute><AgencyPerformance /></AdminRoute>} />
               <Route path="/admin/users" element={<AdminRoute><UserManagement /></AdminRoute>} />
               <Route path="/admin" element={<AdminRoute><Admin /></AdminRoute>} />
+              <Route path="/staff-management" element={<StaffManagement />} />
+              <Route path="/sales" element={<SalesTracking />} />
+              <Route path="/roi" element={<ROITracking />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

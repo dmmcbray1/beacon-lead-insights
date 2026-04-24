@@ -11,6 +11,12 @@ import {
   VENDOR_FILTER_RULES,
 } from './constants';
 
+export function isDoNotCall(statuses: string[]): boolean {
+  return statuses.some(s =>
+    s.trim().toLowerCase() === 'xx - do not call - xx'
+  );
+}
+
 export interface LeadRecord {
   id: string;
   normalized_phone: string;
@@ -29,6 +35,7 @@ export interface LeadRecord {
   /** Total Calls from Deer Dama, captured when lead first reaches sold status */
   calls_at_first_sold: number | null;
   has_bad_phone: boolean;
+  is_do_not_call: boolean;
   latest_call_date: string | null;
   total_voicemails: number;
   statuses: string[];
@@ -170,6 +177,8 @@ export interface LeadTypeBreakdown {
   nonVoicemailCallbacks: number;
   voicemailCallbackToQuoteRate: number;
   nonVoicemailCallbackToQuoteRate: number;
+  doNotCallCount: number;
+  doNotCallRate: number;
 }
 
 export interface KPIData {
@@ -190,6 +199,8 @@ export interface KPIData {
   voicemailLeadRate: number;
   voicemailCallbackToQuoteRate: number;
   nonVoicemailCallbackToQuoteRate: number;
+  totalDoNotCall: number;
+  doNotCallRate: number;
   contactRate: number;
   quoteRate: number;
   quotedToSoldRate: number;
@@ -316,6 +327,10 @@ function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
     nonVoicemailCallbackLeads.length,
   );
 
+  // DNC
+  const doNotCallCount = leads.filter(l => l.is_do_not_call).length;
+  const doNotCallRate = calcRate(doNotCallCount, total);
+
   return {
     leads: total, contacts, contactRate, quoted, quoteRate,
     contactToQuoteRate, callbacks, callbacksQuoted, callbackToQuoteRate,
@@ -329,6 +344,7 @@ function calcBreakdown(leads: LeadRecord[]): LeadTypeBreakdown {
     voicemailLeads, voicemailRate,
     voicemailCallbacks, nonVoicemailCallbacks,
     voicemailCallbackToQuoteRate, nonVoicemailCallbackToQuoteRate,
+    doNotCallCount, doNotCallRate,
   };
 }
 
@@ -455,6 +471,10 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
     nonVmCallbackLeads.length,
   );
 
+  // DNC totals
+  const totalDoNotCall = filtered.filter(l => l.is_do_not_call).length;
+  const doNotCallRate = calcRate(totalDoNotCall, totalLeads);
+
   // Bad phone breakdowns
   const badPhoneNewCount = newLeadsList.filter(l => l.has_bad_phone).length;
   const badPhoneReQuoteCount = reQuoteLeadsList.filter(l => l.has_bad_phone).length;
@@ -476,6 +496,7 @@ export function calculateKPIs(leads: LeadRecord[], applyVendorFilter = false): K
     badPhoneRate, badPhoneNewCount, badPhoneNewRate, badPhoneReQuoteCount, badPhoneReQuoteRate,
     totalVoicemailLeads, totalVoicemailCallbacks, totalNonVoicemailCallbacks,
     voicemailLeadRate, voicemailCallbackToQuoteRate, nonVoicemailCallbackToQuoteRate,
+    totalDoNotCall, doNotCallRate,
     newBreakdown, reQuoteBreakdown,
   };
 }

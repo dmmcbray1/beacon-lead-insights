@@ -30,6 +30,7 @@ import {
   type ParsedBatchState,
   type RequoteDecision,
 } from '@/lib/importService';
+import { importSalesLog, type ImportResult as SalesImportResult } from '@/lib/importSalesLog';
 import type { RicochetMatch } from '@/lib/importRicochet';
 import type { RicochetRowParseError } from '@/lib/ricochetParser';
 import BatchDropSlot, { type BatchDropSlotValue } from '@/components/upload/BatchDropSlot';
@@ -45,11 +46,13 @@ interface BatchState {
   ricochet: BatchDropSlotValue | null;
   dailyCall: BatchDropSlotValue | null;
   deerDama: BatchDropSlotValue | null;
+  salesLog: BatchDropSlotValue | null;
   uploadDate: string;
   notes: string;
   step: Step;
   progress: BatchProgress | null;
   result: BatchResult | null;
+  salesResult: SalesImportResult | null;
   rollbackMessage: string | null;
   requoteMatches: RicochetMatch[] | null;
   parsedState: ParsedBatchState | null;
@@ -68,11 +71,13 @@ const initialState: BatchState = {
   ricochet: null,
   dailyCall: null,
   deerDama: null,
+  salesLog: null,
   uploadDate: new Date().toISOString().split('T')[0],
   notes: '',
   step: 'select',
   progress: null,
   result: null,
+  salesResult: null,
   rollbackMessage: null,
   requoteMatches: null,
   parsedState: null,
@@ -165,8 +170,26 @@ export default function UploadCenter() {
         return;
       }
 
+      // Run Sales Log import if present (optional slot)
+      let salesResult: SalesImportResult | null = null;
+      if (state.salesLog?.file && agencyId) {
+        try {
+          salesResult = await importSalesLog(
+            state.salesLog.file,
+            agencyId,
+            state.uploadDate,
+            'batch_import',
+          );
+        } catch (salesErr) {
+          salesResult = {
+            totalRows: 0, imported: 0, filtered: 0,
+            newLeadsCreated: 0, errors: [String(salesErr)], uploadId: '',
+          };
+        }
+      }
+
       await invalidateCaches();
-      setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
+      setState((prev) => ({ ...prev, step: 'summary', result: res.result, salesResult }));
     } catch (err) {
       await handleBatchError(err);
     }
@@ -189,8 +212,25 @@ export default function UploadCenter() {
       });
 
       if (res.status === 'success') {
+        // Run Sales Log import if present (optional slot)
+        let salesResult: SalesImportResult | null = null;
+        if (state.salesLog?.file) {
+          try {
+            salesResult = await importSalesLog(
+              state.salesLog.file,
+              agencyId,
+              state.uploadDate,
+              'batch_import',
+            );
+          } catch (salesErr) {
+            salesResult = {
+              totalRows: 0, imported: 0, filtered: 0,
+              newLeadsCreated: 0, errors: [String(salesErr)], uploadId: '',
+            };
+          }
+        }
         await invalidateCaches();
-        setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
+        setState((prev) => ({ ...prev, step: 'summary', result: res.result, salesResult }));
       }
     } catch (err) {
       await handleBatchError(err);
@@ -213,7 +253,7 @@ export default function UploadCenter() {
     setState(initialState);
   };
 
-  const totalFiles = 3;
+  const totalFiles = state.salesLog ? 4 : 3;
   const progressPct = state.progress
     ? Math.min(
         100,
@@ -267,7 +307,7 @@ export default function UploadCenter() {
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <section>
               <h3 className="text-sm font-semibold mb-2">
                 1. Ricochet Lead List{' '}
@@ -304,6 +344,19 @@ export default function UploadCenter() {
                 disabledHelperText="Upload the Ricochet Lead List first."
               />
             </section>
+
+            <section>
+              <h3 className="text-sm font-semibold mb-2">
+                4. Sales Log{' '}
+                <span className="text-muted-foreground font-normal">(optional)</span>
+              </h3>
+              <BatchDropSlot
+                expectedType={REPORT_TYPES.SALES_LOG}
+                label="Sales Log"
+                value={state.salesLog}
+                onChange={(v) => setState((prev) => ({ ...prev, salesLog: v }))}
+              />
+            </section>
           </div>
 
           {!agencyId && (
@@ -323,6 +376,7 @@ export default function UploadCenter() {
                 !state.ricochet.typeMatches ||
                 !state.dailyCall.typeMatches ||
                 !state.deerDama.typeMatches ||
+                (state.salesLog != null && !state.salesLog.typeMatches) ||
                 !state.uploadDate
               }
             >
@@ -335,7 +389,7 @@ export default function UploadCenter() {
       {/* ── Step: Preview ─────────────────────────────────────────────────── */}
       {state.step === 'preview' && (
         <div className="max-w-4xl space-y-8">
-          {(['ricochet', 'dailyCall', 'deerDama'] as const).map((key) => {
+          {(['ricochet', 'dailyCall', 'deerDama', 'salesLog'] as const).map((key) => {
             const slot = state[key];
             if (!slot) return null;
             const label =
@@ -343,6 +397,8 @@ export default function UploadCenter() {
                 ? 'Ricochet Lead List'
                 : key === 'dailyCall'
                 ? 'Daily Call Report'
+                : key === 'salesLog'
+                ? 'Sales Log'
                 : 'Deer Dama (Lead) Report';
             return (
               <div key={key}>
@@ -505,6 +561,17 @@ export default function UploadCenter() {
                   },
                 ]}
               />
+              {state.salesResult && (
+                <SummaryBlock
+                  title="Sales Log"
+                  rows={[
+                    { icon: 'success', text: `${state.salesResult.imported} policy rows imported` },
+                    { icon: 'success', text: `${state.salesResult.newLeadsCreated} new re-quote leads created` },
+                    { icon: 'info', text: `${state.salesResult.filtered} rows filtered (non-Beacon Territory)` },
+                    { icon: 'warn', text: `${state.salesResult.errors.length} errors` },
+                  ]}
+                />
+              )}
             </div>
           )}
 

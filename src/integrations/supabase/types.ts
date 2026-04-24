@@ -475,6 +475,9 @@ export type Database = {
           street_address: string | null
           total_call_attempts: number | null
           total_callbacks: number | null
+          total_items_sold: number | null
+          total_policies_sold: number | null
+          total_premium: number | null
           total_voicemails: number | null
           updated_at: string
           zip: string | null
@@ -517,6 +520,9 @@ export type Database = {
           street_address?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
+          total_items_sold?: number | null
+          total_policies_sold?: number | null
+          total_premium?: number | null
           total_voicemails?: number | null
           updated_at?: string
           zip?: string | null
@@ -559,6 +565,9 @@ export type Database = {
           street_address?: string | null
           total_call_attempts?: number | null
           total_callbacks?: number | null
+          total_items_sold?: number | null
+          total_policies_sold?: number | null
+          total_premium?: number | null
           total_voicemails?: number | null
           updated_at?: string
           zip?: string | null
@@ -576,6 +585,110 @@ export type Database = {
             columns: ["ricochet_source_upload_id"]
             isOneToOne: false
             referencedRelation: "uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sales_events: {
+        Row: {
+          agency_id: string
+          created_at: string
+          customer_email: string | null
+          customer_name: string | null
+          customer_phone: string | null
+          customer_zip: string | null
+          effective_date: string | null
+          id: string
+          items: number | null
+          lead_id: string | null
+          lead_source: string | null
+          line_items: string | null
+          normalized_phone: string | null
+          points: number | null
+          policy_number: string | null
+          policy_type: string | null
+          premium: number | null
+          producer: string | null
+          sale_date: string | null
+          sale_id: string
+          staff_id: string | null
+          upload_id: string | null
+        }
+        Insert: {
+          agency_id: string
+          created_at?: string
+          customer_email?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
+          customer_zip?: string | null
+          effective_date?: string | null
+          id?: string
+          items?: number | null
+          lead_id?: string | null
+          lead_source?: string | null
+          line_items?: string | null
+          normalized_phone?: string | null
+          points?: number | null
+          policy_number?: string | null
+          policy_type?: string | null
+          premium?: number | null
+          producer?: string | null
+          sale_date?: string | null
+          sale_id: string
+          staff_id?: string | null
+          upload_id?: string | null
+        }
+        Update: {
+          agency_id?: string
+          created_at?: string
+          customer_email?: string | null
+          customer_name?: string | null
+          customer_phone?: string | null
+          customer_zip?: string | null
+          effective_date?: string | null
+          id?: string
+          items?: number | null
+          lead_id?: string | null
+          lead_source?: string | null
+          line_items?: string | null
+          normalized_phone?: string | null
+          points?: number | null
+          policy_number?: string | null
+          policy_type?: string | null
+          premium?: number | null
+          producer?: string | null
+          sale_date?: string | null
+          sale_id?: string
+          staff_id?: string | null
+          upload_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sales_events_agency_id_fkey"
+            columns: ["agency_id"]
+            isOneToOne: false
+            referencedRelation: "agencies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_events_lead_id_fkey"
+            columns: ["lead_id"]
+            isOneToOne: false
+            referencedRelation: "leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_events_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "uploads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sales_events_staff_id_fkey"
+            columns: ["staff_id"]
+            isOneToOne: false
+            referencedRelation: "staff_members"
             referencedColumns: ["id"]
           },
         ]

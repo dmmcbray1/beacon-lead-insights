@@ -134,6 +134,7 @@ function toLeadRecord(lead: LeadRow): LeadRecord {
     calls_at_first_quote: lead.calls_at_first_quote,
     calls_at_first_sold: lead.calls_at_first_sold,
     has_bad_phone: lead.has_bad_phone ?? false,
+    is_do_not_call: lead.current_status?.toLowerCase() === 'xx - do not call - xx' || false,
     latest_call_date: lead.latest_call_date,
     statuses: buildStatuses(lead),
     call_type: buildCallType(lead),
@@ -419,6 +420,10 @@ export interface CallQualityMetrics {
   voicemailCallCount: number;
   /** voicemailCallCount / totalOutboundCalls */
   voicemailCallRate: number;
+  /** Calls with duration >= 5 minutes (300 seconds) */
+  callsOver5Min: number;
+  /** callsOver5Min / total events */
+  callsOver5MinRate: number;
 }
 
 export function useCallQuality(filters: Filters) {
@@ -475,12 +480,17 @@ export function useCallQuality(filters: Filters) {
       const voicemailCallCount = outboundEvents.filter(e => e.is_voicemail).length;
       const voicemailCallRate = totalOutboundCalls > 0 ? voicemailCallCount / totalOutboundCalls : 0;
 
+      const callsOver5Min = events.filter(e => (e.call_duration_seconds ?? 0) >= 300).length;
+      const callsOver5MinRate = events.length > 0 ? callsOver5Min / events.length : 0;
+
       return {
         avgDialsBeforeContact: leadsWithContact > 0 ? totalDials / leadsWithContact : 0,
         avgContactCallDurationSec,
         totalOutboundCalls,
         voicemailCallCount,
         voicemailCallRate,
+        callsOver5Min,
+        callsOver5MinRate,
       };
     },
     enabled: isAdmin ? true : !!agencyId,
@@ -655,6 +665,336 @@ export function useLeadList(filters: Filters & { search?: string }) {
         vendor: l.latest_vendor_name,
         isBadPhone: l.has_bad_phone ?? false,
       }));
+    },
+    enabled: isAdmin ? true : !!agencyId,
+    staleTime: 30_000,
+  });
+}
+
+// ─── Sales data ───────────────────────────────────────────────────────────────
+
+export interface SalesEventRow {
+  id: string;
+  sale_id: string;
+  sale_date: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  lead_source: string | null;
+  producer: string | null;
+  staff_id: string | null;
+  policy_type: string | null;
+  policy_number: string | null;
+  items: number;
+  premium: number;
+  points: number;
+  lead_id: string | null;
+}
+
+export interface SalesProducerRow {
+  name: string;
+  staffId: string | null;
+  households: number;
+  items: number;
+  policies: number;
+  premium: number;
+  avgPremiumPerHousehold: number;
+}
+
+export interface SalesPolicyTypeRow {
+  policyType: string;
+  count: number;
+  totalItems: number;
+  totalPremium: number;
+}
+
+export interface SalesKPIs {
+  totalHouseholds: number;
+  totalItems: number;
+  totalPolicies: number;
+  totalPremium: number;
+  avgItemsPerHousehold: number;
+  avgPoliciesPerHousehold: number;
+  pctHomeAndAuto: number;
+}
+
+export interface SalesData {
+  kpis: SalesKPIs;
+  byProducer: SalesProducerRow[];
+  byPolicyType: SalesPolicyTypeRow[];
+  raw: SalesEventRow[];
+}
+
+export function useSalesData(filters: Filters) {
+  const { agencyId, isAdmin } = useAuth();
+  const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
+
+  return useQuery({
+    queryKey: ['salesData', filters, effectiveAgencyId],
+    queryFn: async (): Promise<SalesData> => {
+      const { from, to } = getDateBounds(filters.dateRange);
+
+      let q = supabase
+        .from('sales_events')
+        .select('id, sale_id, sale_date, customer_name, customer_phone, lead_source, producer, staff_id, policy_type, policy_number, items, premium, points, lead_id')
+        .limit(50000);
+
+      if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
+      if (from) q = q.gte('sale_date', from);
+      if (to) q = q.lte('sale_date', to);
+
+      const { data, error } = await q;
+      if (error) throw error;
+
+      const events = (data ?? []) as SalesEventRow[];
+
+      // Staff name lookup
+      let smQ = supabase.from('staff_members').select('id, name');
+      if (effectiveAgencyId) smQ = smQ.eq('agency_id', effectiveAgencyId);
+      const { data: staffList } = await smQ;
+      const staffNameMap = new Map<string, string>((staffList ?? []).map((s) => [s.id, s.name]));
+
+      // ── KPIs ────────────────────────────────────────────────────────────
+      const householdMap = new Map<string, SalesEventRow[]>();
+      for (const ev of events) {
+        if (!householdMap.has(ev.sale_id)) householdMap.set(ev.sale_id, []);
+        householdMap.get(ev.sale_id)!.push(ev);
+      }
+
+      const totalHouseholds = householdMap.size;
+      const totalItems = events.reduce((s, e) => s + (e.items ?? 1), 0);
+      const totalPolicies = events.length;
+      const totalPremium = events.reduce((s, e) => s + (Number(e.premium) ?? 0), 0);
+
+      // Households with both Home Insurance and Auto Insurance
+      let homeAndAutoCount = 0;
+      for (const rows of householdMap.values()) {
+        const types = new Set(rows.map((r) => (r.policy_type ?? '').toLowerCase()));
+        if (types.has('home insurance') && types.has('auto insurance')) homeAndAutoCount++;
+      }
+
+      const kpis: SalesKPIs = {
+        totalHouseholds,
+        totalItems,
+        totalPolicies,
+        totalPremium,
+        avgItemsPerHousehold: totalHouseholds > 0 ? totalItems / totalHouseholds : 0,
+        avgPoliciesPerHousehold: totalHouseholds > 0 ? totalPolicies / totalHouseholds : 0,
+        pctHomeAndAuto: totalHouseholds > 0 ? (homeAndAutoCount / totalHouseholds) * 100 : 0,
+      };
+
+      // ── By Producer ─────────────────────────────────────────────────────
+      type ProdAgg = { staffId: string | null; households: Set<string>; items: number; policies: number; premium: number };
+      const byProducerMap = new Map<string, ProdAgg>();
+
+      for (const ev of events) {
+        const key = ev.producer ?? '(Unknown)';
+        if (!byProducerMap.has(key)) {
+          byProducerMap.set(key, { staffId: ev.staff_id, households: new Set(), items: 0, policies: 0, premium: 0 });
+        }
+        const agg = byProducerMap.get(key)!;
+        agg.households.add(ev.sale_id);
+        agg.items += ev.items ?? 1;
+        agg.policies += 1;
+        agg.premium += Number(ev.premium) ?? 0;
+      }
+
+      const byProducer: SalesProducerRow[] = [...byProducerMap.entries()].map(([name, agg]) => ({
+        name: agg.staffId ? (staffNameMap.get(agg.staffId) ?? name) : name,
+        staffId: agg.staffId,
+        households: agg.households.size,
+        items: agg.items,
+        policies: agg.policies,
+        premium: agg.premium,
+        avgPremiumPerHousehold: agg.households.size > 0 ? agg.premium / agg.households.size : 0,
+      })).sort((a, b) => b.premium - a.premium);
+
+      // ── By Policy Type ──────────────────────────────────────────────────
+      type TypeAgg = { count: number; totalItems: number; totalPremium: number };
+      const byTypeMap = new Map<string, TypeAgg>();
+
+      for (const ev of events) {
+        const key = ev.policy_type ?? '(Unknown)';
+        if (!byTypeMap.has(key)) byTypeMap.set(key, { count: 0, totalItems: 0, totalPremium: 0 });
+        const agg = byTypeMap.get(key)!;
+        agg.count += 1;
+        agg.totalItems += ev.items ?? 1;
+        agg.totalPremium += Number(ev.premium) ?? 0;
+      }
+
+      const byPolicyType: SalesPolicyTypeRow[] = [...byTypeMap.entries()].map(([policyType, agg]) => ({
+        policyType,
+        count: agg.count,
+        totalItems: agg.totalItems,
+        totalPremium: agg.totalPremium,
+      })).sort((a, b) => b.totalPremium - a.totalPremium);
+
+      return { kpis, byProducer, byPolicyType, raw: events };
+    },
+    enabled: isAdmin ? true : !!agencyId,
+    staleTime: 30_000,
+  });
+}
+
+// ─── ROI data ─────────────────────────────────────────────────────────────────
+
+export interface ROIMetrics {
+  totalLeadSpend: number;
+  totalLeads: number;
+  totalHouseholdsSold: number;
+  totalPremium: number;
+  totalQuotedHouseholds: number;
+  totalContactedLeads: number;
+  costPerLead: number;
+  costPerQuotedHousehold: number;
+  costPerSoldHousehold: number;
+  costPerConversation: number;
+  avgItemsPerSoldHousehold: number;
+  avgPoliciesPerSoldHousehold: number;
+  pctHomeAndAuto: number;
+  roiPct: number;
+}
+
+export interface ROICampaignRow {
+  campaign: string;
+  leads: number;
+  spend: number;
+  contacted: number;
+  quoted: number;
+  sold: number;
+  premium: number;
+  costPerLead: number;
+  costPerSold: number;
+  roiPct: number;
+}
+
+export interface ROIData {
+  metrics: ROIMetrics;
+  byCampaign: ROICampaignRow[];
+}
+
+export function useROIData(filters: Filters) {
+  const { agencyId, isAdmin } = useAuth();
+  const effectiveAgencyId = isAdmin ? (filters.agency !== 'all' ? filters.agency : null) : agencyId;
+
+  return useQuery({
+    queryKey: ['roiData', filters, effectiveAgencyId],
+    queryFn: async (): Promise<ROIData> => {
+      const { from, to } = getDateBounds(filters.dateRange);
+
+      // ── Leads data ───────────────────────────────────────────────────────
+      let leadsQ = supabase
+        .from('leads')
+        .select('id, lead_cost, campaign, first_seen_date, first_contact_date, first_quote_date, first_sold_date, total_items_sold, total_policies_sold')
+        .limit(50000);
+
+      if (effectiveAgencyId) leadsQ = leadsQ.eq('agency_id', effectiveAgencyId);
+      if (from) leadsQ = leadsQ.gte('first_seen_date', from);
+      if (to) leadsQ = leadsQ.lte('first_seen_date', to);
+
+      const { data: leadsData, error: leadsErr } = await leadsQ;
+      if (leadsErr) throw leadsErr;
+
+      const leads = leadsData ?? [];
+
+      // ── Sales events data ────────────────────────────────────────────────
+      let salesQ = supabase
+        .from('sales_events')
+        .select('sale_id, policy_type, items, premium')
+        .limit(50000);
+
+      if (effectiveAgencyId) salesQ = salesQ.eq('agency_id', effectiveAgencyId);
+      if (from) salesQ = salesQ.gte('sale_date', from);
+      if (to) salesQ = salesQ.lte('sale_date', to);
+
+      const { data: salesData, error: salesErr } = await salesQ;
+      if (salesErr) throw salesErr;
+
+      const salesEvents = salesData ?? [];
+
+      // ── Aggregate metrics ────────────────────────────────────────────────
+      const totalLeadSpend = leads.reduce((s, l) => s + (Number(l.lead_cost) ?? 0), 0);
+      const totalLeads = leads.length;
+      const totalContactedLeads = leads.filter((l) => l.first_contact_date != null).length;
+      const totalQuotedHouseholds = leads.filter((l) => l.first_quote_date != null).length;
+
+      // Sales households
+      const householdMap = new Map<string, typeof salesEvents>();
+      for (const ev of salesEvents) {
+        if (!householdMap.has(ev.sale_id)) householdMap.set(ev.sale_id, []);
+        householdMap.get(ev.sale_id)!.push(ev);
+      }
+      const totalHouseholdsSold = householdMap.size;
+      const totalPremium = salesEvents.reduce((s, e) => s + (Number(e.premium) ?? 0), 0);
+
+      let totalItemsSold = 0;
+      let totalPoliciesSold = 0;
+      let homeAndAutoCount = 0;
+      for (const rows of householdMap.values()) {
+        const items = rows.reduce((s, r) => s + (r.items ?? 1), 0);
+        totalItemsSold += items;
+        totalPoliciesSold += rows.length;
+        const types = new Set(rows.map((r) => (r.policy_type ?? '').toLowerCase()));
+        if (types.has('home insurance') && types.has('auto insurance')) homeAndAutoCount++;
+      }
+
+      const metrics: ROIMetrics = {
+        totalLeadSpend,
+        totalLeads,
+        totalHouseholdsSold,
+        totalPremium,
+        totalQuotedHouseholds,
+        totalContactedLeads,
+        costPerLead: totalLeads > 0 ? totalLeadSpend / totalLeads : 0,
+        costPerQuotedHousehold: totalQuotedHouseholds > 0 ? totalLeadSpend / totalQuotedHouseholds : 0,
+        costPerSoldHousehold: totalHouseholdsSold > 0 ? totalLeadSpend / totalHouseholdsSold : 0,
+        costPerConversation: totalContactedLeads > 0 ? totalLeadSpend / totalContactedLeads : 0,
+        avgItemsPerSoldHousehold: totalHouseholdsSold > 0 ? totalItemsSold / totalHouseholdsSold : 0,
+        avgPoliciesPerSoldHousehold: totalHouseholdsSold > 0 ? totalPoliciesSold / totalHouseholdsSold : 0,
+        pctHomeAndAuto: totalHouseholdsSold > 0 ? (homeAndAutoCount / totalHouseholdsSold) * 100 : 0,
+        roiPct: totalLeadSpend > 0 ? (totalPremium / totalLeadSpend) * 100 : 0,
+      };
+
+      // ── By Campaign ──────────────────────────────────────────────────────
+      type CampAgg = {
+        leads: number;
+        spend: number;
+        contacted: number;
+        quoted: number;
+        sold: number;
+      };
+      const byCampaignMap = new Map<string, CampAgg>();
+
+      for (const lead of leads) {
+        const key = lead.campaign ?? '(No Campaign)';
+        if (!byCampaignMap.has(key)) {
+          byCampaignMap.set(key, { leads: 0, spend: 0, contacted: 0, quoted: 0, sold: 0 });
+        }
+        const agg = byCampaignMap.get(key)!;
+        agg.leads++;
+        agg.spend += Number(lead.lead_cost) ?? 0;
+        if (lead.first_contact_date) agg.contacted++;
+        if (lead.first_quote_date) agg.quoted++;
+        if (lead.first_sold_date) agg.sold++;
+      }
+
+      const byCampaign: ROICampaignRow[] = [...byCampaignMap.entries()].map(([campaign, agg]) => {
+        // Estimate premium for this campaign (proportional split not perfect but workable)
+        const campPremium = totalLeads > 0 ? (agg.leads / totalLeads) * totalPremium : 0;
+        return {
+          campaign,
+          leads: agg.leads,
+          spend: agg.spend,
+          contacted: agg.contacted,
+          quoted: agg.quoted,
+          sold: agg.sold,
+          premium: campPremium,
+          costPerLead: agg.leads > 0 ? agg.spend / agg.leads : 0,
+          costPerSold: agg.sold > 0 ? agg.spend / agg.sold : 0,
+          roiPct: agg.spend > 0 ? (campPremium / agg.spend) * 100 : 0,
+        };
+      }).sort((a, b) => b.spend - a.spend);
+
+      return { metrics, byCampaign };
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,

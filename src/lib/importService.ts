@@ -706,11 +706,47 @@ export async function importDailyCallReport(
   const callEventBatch: Record<string, unknown>[] = [];
   const rawRowBatch: Record<string, unknown>[] = [];
 
+  // Inbound dedup: only count 1 inbound call per phone number per calendar day
+  const seenInboundKeys = new Set<string>();
+
   for (const vr of matchedRows) {
     const state = leadStates.get(vr.phone);
     if (!state?.id) {
       rowsSkipped++;
       continue;
+    }
+
+    // Deduplicate inbound calls: skip if we've already seen an inbound call
+    // for this phone on this calendar day
+    if (vr.isInbound && vr.callDateStr) {
+      const dedupKey = `${vr.phone}|${vr.callDateStr}`;
+      if (seenInboundKeys.has(dedupKey)) {
+        rawRowBatch.push({
+          upload_id: uploadId,
+          row_number: vr.rowNum,
+          date: vr.callDateStr,
+          full_name: str(vr.raw['Full name']),
+          user_name: vr.userName,
+          from_number: vr.fromNum,
+          to_number: vr.toNum,
+          call_type: vr.callType,
+          current_status: vr.currentStatus,
+          call_status: vr.callStatus,
+          vendor_name: vr.vendorName,
+          call_duration: str(vr.raw['Call Duration']),
+          call_duration_seconds: vr.callDurSec,
+          normalized_phone: vr.phone,
+          raw_phone: vr.isInbound ? vr.fromNum : vr.toNum,
+          resolved_lead_phone: vr.phone,
+          matched_lead_id: state.id,
+          match_rule: existingMap.has(vr.phone) ? 'phone' : 'new',
+          processing_status: 'suppressed_duplicate',
+          raw_data: vr.raw,
+        });
+        rowsSkipped++;
+        continue;
+      }
+      seenInboundKeys.add(dedupKey);
     }
 
     callEventBatch.push({

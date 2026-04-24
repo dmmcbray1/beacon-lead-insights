@@ -47,6 +47,8 @@ const newBreakdown: LeadTypeBreakdown = {
   nonVoicemailCallbacks: 63,
   voicemailCallbackToQuoteRate: 0.28,
   nonVoicemailCallbackToQuoteRate: 0.24,
+  doNotCallCount: 0,
+  doNotCallRate: 0,
 };
 
 const reQuoteBreakdown: LeadTypeBreakdown = {
@@ -80,6 +82,8 @@ const reQuoteBreakdown: LeadTypeBreakdown = {
   nonVoicemailCallbacks: 71,
   voicemailCallbackToQuoteRate: 0.32,
   nonVoicemailCallbackToQuoteRate: 0.31,
+  doNotCallCount: 0,
+  doNotCallRate: 0,
 };
 
 export function getSeedKPIs(): KPIData {
@@ -120,6 +124,8 @@ export function getSeedKPIs(): KPIData {
     badPhoneNewRate: 0.0605,
     badPhoneReQuoteCount: 19,
     badPhoneReQuoteRate: 0.0537,
+    totalDoNotCall: 0,
+    doNotCallRate: 0,
     newBreakdown,
     reQuoteBreakdown,
   };
