@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, AlertTriangle, Loader2, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -12,22 +12,36 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { REPORT_TYPES } from '@/lib/constants';
 import {
   importBatch,
+  resumeBatch,
+  BatchRollbackError,
   type BatchProgress,
   type BatchResult,
-  BatchRollbackError,
+  type ParsedBatchState,
+  type RequoteDecision,
 } from '@/lib/importService';
+import type { RicochetMatch } from '@/lib/importRicochet';
 import BatchDropSlot, { type BatchDropSlotValue } from '@/components/upload/BatchDropSlot';
 import UploadHistoryRow, { type UploadRow } from '@/components/upload/UploadHistoryRow';
+import RequoteReviewDialog from '@/components/upload/RequoteReviewDialog';
 import { useUploadHistory } from '@/hooks/useLeadData';
 import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 
-type Step = 'select' | 'preview' | 'importing' | 'summary';
+type Step = 'select' | 'preview' | 'importing' | 'requote_review' | 'summary';
 
 interface BatchState {
+  ricochet: BatchDropSlotValue | null;
   dailyCall: BatchDropSlotValue | null;
   deerDama: BatchDropSlotValue | null;
   uploadDate: string;
@@ -36,9 +50,21 @@ interface BatchState {
   progress: BatchProgress | null;
   result: BatchResult | null;
   rollbackMessage: string | null;
+  requoteMatches: RicochetMatch[] | null;
+  parsedState: ParsedBatchState | null;
+  pendingBatchId: string | null;
+}
+
+type DuplicateInfo = NonNullable<BatchResult['duplicateOf']>;
+
+interface SkippedRow {
+  rowNumber: number;
+  errorMessage: string;
+  rawData: Record<string, unknown>;
 }
 
 const initialState: BatchState = {
+  ricochet: null,
   dailyCall: null,
   deerDama: null,
   uploadDate: new Date().toISOString().split('T')[0],
@@ -47,6 +73,9 @@ const initialState: BatchState = {
   progress: null,
   result: null,
   rollbackMessage: null,
+  requoteMatches: null,
+  parsedState: null,
+  pendingBatchId: null,
 };
 
 export default function UploadCenter() {
@@ -71,58 +100,102 @@ export default function UploadCenter() {
   }
 
   const [state, setState] = useState<BatchState>(initialState);
-  const [duplicatePrompt, setDuplicatePrompt] = useState<BatchResult['duplicateOf'] | null>(null);
+  const [duplicatePrompt, setDuplicatePrompt] = useState<DuplicateInfo | null>(null);
+  const [skippedModal, setSkippedModal] = useState<
+    { title: string; uploadId: string } | null
+  >(null);
+
+  const invalidateCaches = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['leads'] });
+    await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
+    await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+    await queryClient.invalidateQueries({ queryKey: ['leadList'] });
+  };
+
+  const onProgress = (p: BatchProgress) =>
+    setState((prev) => ({ ...prev, progress: p }));
+
+  const handleBatchError = async (err: unknown) => {
+    const message =
+      err instanceof BatchRollbackError
+        ? err.message
+        : 'Batch import failed: ' + String(err);
+    await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+    setState((prev) => ({
+      ...prev,
+      step: 'summary',
+      rollbackMessage: message,
+      result: null,
+    }));
+  };
 
   const runBatch = async (force: boolean) => {
-    if (!state.dailyCall || !state.deerDama || !agencyId) return;
+    if (!state.ricochet || !state.dailyCall || !state.deerDama || !agencyId) return;
     setState((prev) => ({ ...prev, step: 'importing', progress: null, rollbackMessage: null }));
 
-    const onProgress = (p: BatchProgress) => {
-      setState((prev) => ({ ...prev, progress: p }));
-    };
-
     try {
-      const result = await importBatch(
-        state.dailyCall.file,
-        state.deerDama.file,
+      const res = await importBatch({
+        ricochetFile: state.ricochet.file,
+        dailyCallFile: state.dailyCall.file,
+        deerDamaFile: state.deerDama.file,
         agencyId,
-        state.uploadDate,
-        state.notes,
+        uploadDate: state.uploadDate,
+        notes: state.notes,
         onProgress,
         force,
-      );
+      });
 
-      if (result.duplicateOf && !force) {
-        setDuplicatePrompt(result.duplicateOf);
+      if (res.status === 'duplicate') {
+        setDuplicatePrompt(res.duplicateOf);
         setState((prev) => ({ ...prev, step: 'preview', progress: null }));
         return;
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['leads'] });
-      await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
-      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
-      await queryClient.invalidateQueries({ queryKey: ['leadList'] });
+      if (res.status === 'needs_requote_review') {
+        setState((prev) => ({
+          ...prev,
+          step: 'requote_review',
+          requoteMatches: res.matches,
+          parsedState: res.parsedState,
+          pendingBatchId: res.pendingBatchId,
+          progress: null,
+        }));
+        return;
+      }
 
-      setState((prev) => ({ ...prev, step: 'summary', result }));
+      await invalidateCaches();
+      setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
     } catch (err) {
-      const message =
-        err instanceof BatchRollbackError
-          ? err.message
-          : 'Batch import failed: ' + String(err);
-      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
-      setState((prev) => ({
-        ...prev,
-        step: 'summary',
-        rollbackMessage: message,
-        result: {
-          batchId: '',
-          dailyCall: { uploadId: '', rowsTotal: 0, rowsImported: 0, rowsFiltered: 0, rowsSkipped: 0, newLeads: 0, updatedLeads: 0, errors: [] },
-          deerDama: { uploadId: '', rowsTotal: 0, rowsImported: 0, rowsFiltered: 0, rowsSkipped: 0, newLeads: 0, updatedLeads: 0, errors: [] },
-          rolledBack: true,
-        },
-      }));
+      await handleBatchError(err);
     }
   };
+
+  const handleRequoteConfirm = async (decisions: Map<string, RequoteDecision>) => {
+    if (!state.parsedState || !state.pendingBatchId || !agencyId) return;
+    setState((prev) => ({ ...prev, step: 'importing', progress: null, rollbackMessage: null }));
+
+    try {
+      const res = await resumeBatch({
+        pendingBatchId: state.pendingBatchId,
+        decisions,
+        parsedState: state.parsedState,
+        agencyId,
+        uploadDate: state.uploadDate,
+        notes: state.notes,
+        onProgress,
+        force: false,
+      });
+
+      if (res.status === 'success') {
+        await invalidateCaches();
+        setState((prev) => ({ ...prev, step: 'summary', result: res.result }));
+      }
+    } catch (err) {
+      await handleBatchError(err);
+    }
+  };
+
+  const handleRequoteCancel = () => setState(initialState);
 
   const handleImport = () => runBatch(false);
 
@@ -138,6 +211,24 @@ export default function UploadCenter() {
     setState(initialState);
   };
 
+  const totalFiles = 3;
+  const progressPct = state.progress
+    ? Math.min(
+        100,
+        (state.progress.fileIndex * 100) / totalFiles +
+          (state.progress.total > 0
+            ? (state.progress.processed / state.progress.total) * (100 / totalFiles)
+            : 0),
+      )
+    : 0;
+
+  const currentFileLabel =
+    state.progress?.currentFile === 'ricochet'
+      ? 'Ricochet Lead List'
+      : state.progress?.currentFile === 'daily_call'
+      ? 'Daily Call'
+      : 'Deer Dama';
+
   return (
     <div className="page-container">
       <div className="mb-6">
@@ -145,7 +236,7 @@ export default function UploadCenter() {
           Upload Center
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Import Daily Call Reports and Deer Dama (Lead) Reports from Ricochet
+          Import Ricochet Lead List, Daily Call Report, and Deer Dama (Lead) Report
         </p>
       </div>
 
@@ -174,19 +265,43 @@ export default function UploadCenter() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <BatchDropSlot
-              expectedType={REPORT_TYPES.DAILY_CALL}
-              label="Daily Call Report"
-              value={state.dailyCall}
-              onChange={(v) => setState((prev) => ({ ...prev, dailyCall: v }))}
-            />
-            <BatchDropSlot
-              expectedType={REPORT_TYPES.DEER_DAMA}
-              label="Deer Dama (Lead) Report"
-              value={state.deerDama}
-              onChange={(v) => setState((prev) => ({ ...prev, deerDama: v }))}
-            />
+          <div className="space-y-4">
+            <section>
+              <h3 className="text-sm font-semibold mb-2">
+                1. Ricochet Lead List{' '}
+                <span className="text-muted-foreground font-normal">(required first)</span>
+              </h3>
+              <BatchDropSlot
+                expectedType={REPORT_TYPES.RICOCHET_LEAD_LIST}
+                label="Ricochet Lead List"
+                value={state.ricochet}
+                onChange={(v) => setState((prev) => ({ ...prev, ricochet: v }))}
+              />
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold mb-2">2. Daily Call Report</h3>
+              <BatchDropSlot
+                expectedType={REPORT_TYPES.DAILY_CALL}
+                label="Daily Call Report"
+                value={state.dailyCall}
+                onChange={(v) => setState((prev) => ({ ...prev, dailyCall: v }))}
+                disabled={!state.ricochet}
+                disabledHelperText="Upload the Ricochet Lead List first."
+              />
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold mb-2">3. Deer Dama (Lead) Report</h3>
+              <BatchDropSlot
+                expectedType={REPORT_TYPES.DEER_DAMA}
+                label="Deer Dama (Lead) Report"
+                value={state.deerDama}
+                onChange={(v) => setState((prev) => ({ ...prev, deerDama: v }))}
+                disabled={!state.ricochet}
+                disabledHelperText="Upload the Ricochet Lead List first."
+              />
+            </section>
           </div>
 
           {!agencyId && (
@@ -200,8 +315,10 @@ export default function UploadCenter() {
             <Button
               onClick={() => setState((prev) => ({ ...prev, step: 'preview' }))}
               disabled={
+                !state.ricochet ||
                 !state.dailyCall ||
                 !state.deerDama ||
+                !state.ricochet.typeMatches ||
                 !state.dailyCall.typeMatches ||
                 !state.deerDama.typeMatches ||
                 !state.uploadDate
@@ -216,10 +333,15 @@ export default function UploadCenter() {
       {/* ── Step: Preview ─────────────────────────────────────────────────── */}
       {state.step === 'preview' && (
         <div className="max-w-4xl space-y-8">
-          {(['dailyCall', 'deerDama'] as const).map((key) => {
+          {(['ricochet', 'dailyCall', 'deerDama'] as const).map((key) => {
             const slot = state[key];
             if (!slot) return null;
-            const label = key === 'dailyCall' ? 'Daily Call Report' : 'Deer Dama (Lead) Report';
+            const label =
+              key === 'ricochet'
+                ? 'Ricochet Lead List'
+                : key === 'dailyCall'
+                ? 'Daily Call Report'
+                : 'Deer Dama (Lead) Report';
             return (
               <div key={key}>
                 <h2 className="text-base font-semibold text-foreground mb-2">{label}</h2>
@@ -280,11 +402,11 @@ export default function UploadCenter() {
             <div>
               <p className="text-sm font-medium text-foreground">
                 Importing batch
-                {state.progress && ` — file ${state.progress.fileIndex} of 2`}
+                {state.progress && ` — file ${state.progress.fileIndex + 1} of ${totalFiles}`}
               </p>
               <p className="text-xs text-muted-foreground">
                 {state.progress
-                  ? `${state.progress.currentFile === 'daily_call' ? 'Daily Call' : 'Deer Dama'}: ${state.progress.phase} (${state.progress.processed}/${state.progress.total})`
+                  ? `${currentFileLabel}: ${state.progress.phase} (${state.progress.processed}/${state.progress.total})`
                   : 'Starting…'}
               </p>
             </div>
@@ -292,11 +414,7 @@ export default function UploadCenter() {
           <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
             <div
               className="h-full bg-primary transition-all"
-              style={{
-                width: state.progress
-                  ? `${Math.min(100, ((state.progress.fileIndex - 1) * 50) + ((state.progress.processed / Math.max(1, state.progress.total)) * 50))}%`
-                  : '0%',
-              }}
+              style={{ width: `${progressPct}%` }}
             />
           </div>
         </div>
@@ -328,38 +446,59 @@ export default function UploadCenter() {
           )}
 
           {state.result && !state.rollbackMessage && (
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              {(['dailyCall', 'deerDama'] as const).map((key) => {
-                const r = state.result![key];
-                const title = key === 'dailyCall' ? 'Daily Call Report' : 'Deer Dama (Lead) Report';
-                return (
-                  <div key={key} className="border rounded-md p-4 bg-card">
-                    <p className="text-sm font-medium text-foreground mb-2">{title}</p>
-                    <dl className="grid grid-cols-2 gap-1 text-xs">
-                      <dt className="text-muted-foreground">Rows imported</dt>
-                      <dd className="text-right tabular-nums">{r.rowsImported}</dd>
-                      <dt className="text-muted-foreground">Filtered</dt>
-                      <dd className="text-right tabular-nums">{r.rowsFiltered}</dd>
-                      <dt className="text-muted-foreground">Skipped</dt>
-                      <dd className="text-right tabular-nums">{r.rowsSkipped}</dd>
-                      <dt className="text-muted-foreground">New leads</dt>
-                      <dd className="text-right tabular-nums">{r.newLeads}</dd>
-                      <dt className="text-muted-foreground">Updated leads</dt>
-                      <dd className="text-right tabular-nums">{r.updatedLeads}</dd>
-                    </dl>
-                    {r.errors.length > 0 && (
-                      <details className="mt-2 text-xs">
-                        <summary className="text-warning cursor-pointer">{r.errors.length} warnings</summary>
-                        <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                          {r.errors.slice(0, 20).map((e, i) => (
-                            <li key={i}>{e}</li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="space-y-4 mb-6">
+              {state.result.ricochet && (
+                <SummaryBlock
+                  title="Ricochet Lead List"
+                  rows={[
+                    { icon: 'success', text: `${state.result.ricochet.rowsImported} new leads created` },
+                    { icon: 'success', text: `${state.result.ricochet.rowsUpdated} leads updated (overwritten)` },
+                    { icon: 'info', text: `${state.result.ricochet.requotesLogged} requotes logged` },
+                    {
+                      icon: 'warn',
+                      text: `${state.result.ricochet.errors.length} rows with parse errors`,
+                    },
+                  ]}
+                />
+              )}
+              <SummaryBlock
+                title="Daily Call Report"
+                rows={[
+                  { icon: 'success', text: `${state.result.dailyCall.rowsImported} call events imported` },
+                  { icon: 'info', text: `${state.result.dailyCall.updatedLeads} leads updated` },
+                  {
+                    icon: 'warn',
+                    text: `${state.result.dailyCall.rowsSkippedUnmatched ?? 0} rows skipped (phone not in leads)`,
+                    onClick:
+                      (state.result.dailyCall.rowsSkippedUnmatched ?? 0) > 0
+                        ? () =>
+                            setSkippedModal({
+                              title: 'Daily Call — Skipped Rows',
+                              uploadId: state.result!.dailyCall.uploadId,
+                            })
+                        : undefined,
+                  },
+                ]}
+              />
+              <SummaryBlock
+                title="Deer Dama (Lead) Report"
+                rows={[
+                  { icon: 'success', text: `${state.result.deerDama.rowsImported} lead records imported` },
+                  { icon: 'info', text: `${state.result.deerDama.updatedLeads} leads updated` },
+                  {
+                    icon: 'warn',
+                    text: `${state.result.deerDama.rowsSkippedUnmatched ?? 0} rows skipped (phone not in leads)`,
+                    onClick:
+                      (state.result.deerDama.rowsSkippedUnmatched ?? 0) > 0
+                        ? () =>
+                            setSkippedModal({
+                              title: 'Deer Dama — Skipped Rows',
+                              uploadId: state.result!.deerDama.uploadId,
+                            })
+                        : undefined,
+                  },
+                ]}
+              />
             </div>
           )}
 
@@ -369,6 +508,22 @@ export default function UploadCenter() {
         </div>
       )}
 
+      {/* ── Requote Review Dialog ─────────────────────────────────────────── */}
+      <RequoteReviewDialog
+        open={state.step === 'requote_review' && state.requoteMatches != null}
+        matches={state.requoteMatches ?? []}
+        onConfirm={handleRequoteConfirm}
+        onCancel={handleRequoteCancel}
+      />
+
+      {/* ── Skipped Rows Modal ────────────────────────────────────────────── */}
+      <SkippedRowsModal
+        open={skippedModal != null}
+        title={skippedModal?.title ?? ''}
+        uploadId={skippedModal?.uploadId ?? null}
+        onClose={() => setSkippedModal(null)}
+      />
+
       {/* ── Duplicate-import confirmation ─────────────────────────────────── */}
       <AlertDialog open={!!duplicatePrompt} onOpenChange={(open) => !open && handleDuplicateCancel()}>
         <AlertDialogContent>
@@ -376,6 +531,12 @@ export default function UploadCenter() {
             <AlertDialogTitle>Duplicate file detected</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2">
+                {duplicatePrompt?.ricochet && (
+                  <p>
+                    The Ricochet Lead List file matches a previous import:{' '}
+                    <strong>{duplicatePrompt.ricochet.fileName}</strong> ({duplicatePrompt.ricochet.uploadDate}).
+                  </p>
+                )}
                 {duplicatePrompt?.dailyCall && (
                   <p>
                     The Daily Call file matches a previous import:{' '}
@@ -442,5 +603,181 @@ export default function UploadCenter() {
         </div>
       )}
     </div>
+  );
+}
+
+// ─── SummaryBlock ─────────────────────────────────────────────────────────────
+
+type SummaryIcon = 'success' | 'info' | 'warn';
+
+interface SummaryRowSpec {
+  icon: SummaryIcon;
+  text: string;
+  onClick?: () => void;
+}
+
+function SummaryBlock({ title, rows }: { title: string; rows: SummaryRowSpec[] }) {
+  return (
+    <div className="border rounded-md p-4 bg-card">
+      <p className="text-sm font-medium text-foreground mb-2">{title}</p>
+      <ul className="space-y-1 text-xs">
+        {rows.map((r, i) => (
+          <li key={i} className="flex items-center gap-2">
+            {r.icon === 'success' && <CheckCircle2 className="w-3.5 h-3.5 text-success shrink-0" />}
+            {r.icon === 'info' && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground shrink-0" />}
+            {r.icon === 'warn' && <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />}
+            {r.onClick ? (
+              <button
+                onClick={r.onClick}
+                className="text-foreground underline underline-offset-2 hover:text-primary text-left"
+              >
+                {r.text}
+              </button>
+            ) : (
+              <span className="text-foreground">{r.text}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ─── SkippedRowsModal ─────────────────────────────────────────────────────────
+
+function SkippedRowsModal({
+  open,
+  title,
+  uploadId,
+  onClose,
+}: {
+  open: boolean;
+  title: string;
+  uploadId: string | null;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<SkippedRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !uploadId) {
+      setRows(null);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    supabase
+      .from('import_errors')
+      .select('row_number, error_message, raw_data')
+      .eq('upload_id', uploadId)
+      .eq('error_type', 'phone_not_in_leads')
+      .order('row_number', { ascending: true })
+      .then(({ data, error: qerr }) => {
+        if (cancelled) return;
+        if (qerr) {
+          setError(qerr.message);
+          setRows(null);
+        } else {
+          setRows(
+            (data ?? []).map((r) => ({
+              rowNumber: (r.row_number as number) ?? 0,
+              errorMessage: (r.error_message as string) ?? '',
+              rawData: (r.raw_data as Record<string, unknown>) ?? {},
+            })),
+          );
+        }
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, uploadId]);
+
+  const downloadCsv = () => {
+    if (!rows || rows.length === 0) return;
+    const allKeys = new Set<string>();
+    for (const r of rows) {
+      for (const k of Object.keys(r.rawData)) allKeys.add(k);
+    }
+    const headers = ['row_number', 'error_message', ...allKeys];
+    const escape = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.join(',')];
+    for (const r of rows) {
+      const row = [
+        r.rowNumber,
+        r.errorMessage,
+        ...[...allKeys].map((k) => r.rawData[k]),
+      ].map(escape);
+      lines.push(row.join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/\s+/g, '_').toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+
+        {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {error && <p className="text-sm text-destructive">Error: {error}</p>}
+
+        {rows && rows.length === 0 && (
+          <p className="text-sm text-muted-foreground">No skipped rows.</p>
+        )}
+
+        {rows && rows.length > 0 && (
+          <div className="border rounded-md overflow-auto max-h-[50vh]">
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Row</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Reason</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Raw data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-3 py-1.5 tabular-nums">{r.rowNumber}</td>
+                    <td className="px-3 py-1.5">{r.errorMessage}</td>
+                    <td className="px-3 py-1.5 font-mono text-[10px] max-w-[400px] truncate">
+                      {JSON.stringify(r.rawData)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={downloadCsv}
+            disabled={!rows || rows.length === 0}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Download CSV
+          </Button>
+          <Button onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

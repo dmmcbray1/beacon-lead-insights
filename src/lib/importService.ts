@@ -10,6 +10,18 @@
 import * as XLSX from 'xlsx';
 import { supabase } from '@/integrations/supabase/client';
 import { normalizePhone } from './phone';
+import type {
+  RicochetMatch,
+  RicochetWriteSummary,
+  RicochetDecision,
+} from './importRicochet';
+import {
+  parseRicochetFile,
+  detectRicochetMatches,
+  writeRicochetPhase,
+  commitRicochetOverwrites,
+} from './importRicochet';
+import type { RicochetRow, RicochetRowParseError } from './ricochetParser';
 import {
   CONTACT_DISPOSITIONS,
   QUOTE_DISPOSITIONS,
@@ -29,12 +41,24 @@ export interface ImportProgress {
   total: number;
 }
 
+// Shared shape for rows skipped because their phone isn't present in `leads`.
+// Used by both importDailyCallReport and importDeerDamaReport — both bulk-
+// insert these into the `import_errors` table at the end of their runs.
+type UnmatchedError = {
+  upload_id: string;
+  row_number: number;
+  error_type: 'phone_not_in_leads';
+  error_message: string;
+  raw_data: Record<string, unknown>;
+};
+
 export interface ImportResult {
   uploadId: string;
   rowsTotal: number;
   rowsImported: number;
   rowsFiltered: number;
   rowsSkipped: number;
+  rowsSkippedUnmatched?: number;
   newLeads: number;
   updatedLeads: number;
   errors: string[];
@@ -52,8 +76,8 @@ export interface ImportResult {
 }
 
 export interface BatchProgress {
-  currentFile: 'daily_call' | 'deer_dama';
-  fileIndex: 1 | 2;
+  currentFile: 'ricochet' | 'daily_call' | 'deer_dama';
+  fileIndex: 0 | 1 | 2;
   phase: string;
   processed: number;
   total: number;
@@ -61,16 +85,18 @@ export interface BatchProgress {
 
 export interface BatchResult {
   batchId: string;
+  ricochet?: RicochetWriteSummary;
   dailyCall: ImportResult;
   deerDama: ImportResult;
   rolledBack: boolean;
   rollbackError?: string;
   /**
-   * Populated when either file is a duplicate of a previously-imported file
-   * and `force` was false. When set, no rows were imported for either file —
+   * Populated when any file is a duplicate of a previously-imported file
+   * and `force` was false. When set, no rows were imported for any file —
    * the caller should prompt the user and re-invoke importBatch with force: true.
    */
   duplicateOf?: {
+    ricochet?: { uploadId: string; fileName: string; uploadDate: string };
     dailyCall?: { uploadId: string; fileName: string; uploadDate: string };
     deerDama?: { uploadId: string; fileName: string; uploadDate: string };
   };
@@ -78,7 +104,7 @@ export interface BatchResult {
 
 export class BatchRollbackError extends Error {
   constructor(
-    public readonly failedFile: 'daily_call' | 'deer_dama',
+    public readonly failedFile: 'ricochet' | 'daily_call' | 'deer_dama',
     public readonly originalError: Error,
     public readonly rollbackError?: Error,
   ) {
@@ -89,6 +115,27 @@ export class BatchRollbackError extends Error {
     this.name = 'BatchRollbackError';
   }
 }
+
+export type RequoteDecision = RicochetDecision;
+
+export interface ParsedBatchState {
+  ricochetFile: File;
+  ricochetRows: RicochetRow[];
+  ricochetParseErrors: RicochetRowParseError[];
+  existingMatches: RicochetMatch[];
+  dailyCallFile: File;
+  deerDamaFile: File;
+}
+
+export type ImportBatchResult =
+  | { status: 'success'; result: BatchResult }
+  | { status: 'duplicate'; duplicateOf: NonNullable<BatchResult['duplicateOf']> }
+  | {
+      status: 'needs_requote_review';
+      pendingBatchId: string;
+      matches: RicochetMatch[];
+      parsedState: ParsedBatchState;
+    };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -502,7 +549,34 @@ export async function importDailyCallReport(
   const uniquePhones = [...new Set(validRows.map((r) => r.phone))];
   const existingMap = await bulkLookupLeadsByPhone(uniquePhones, agencyId);
 
-  // Per-lead accumulated state for leads we're updating this run
+  // ── Phase 2b: Skip rows whose phone is not in leads ───────────────────────
+  // Phase 0 (Ricochet) is the authoritative source of new leads. Any Daily
+  // Call row whose phone is not present in `leads` (either pre-existing or
+  // just created by Phase 0) is logged to `import_errors` and dropped here
+  // BEFORE any derived-table writes (leads / call_events / raw rows).
+  //
+  // This runs regardless of `force`: it only affects rows whose phone is
+  // missing from leads, not duplicate-file re-imports.
+
+  const unmatchedErrors: UnmatchedError[] = [];
+  const matchedRows = validRows.filter((vr) => {
+    if (existingMap.has(vr.phone)) return true;
+    unmatchedErrors.push({
+      upload_id: uploadId,
+      row_number: vr.rowNum,
+      error_type: 'phone_not_in_leads',
+      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+      raw_data: vr.raw,
+    });
+    return false;
+  });
+  const rowsSkippedUnmatched = unmatchedErrors.length;
+
+  // Per-lead accumulated state for leads we're updating this run.
+  // After the phone_not_in_leads filter above, every phone in matchedRows
+  // already has a corresponding row in existingMap — so there is no "new
+  // lead" branch here. Ricochet (Phase 0) is the authoritative source of
+  // new leads.
   type LeadState = {
     id: string;
     total_call_attempts: number;
@@ -519,7 +593,6 @@ export async function importDailyCallReport(
     current_status: string;
     current_lead_type: string;
     latest_vendor_name: string;
-    isNew: boolean;
   };
 
   const leadStates = new Map<string, LeadState>();
@@ -536,49 +609,27 @@ export async function importDailyCallReport(
     return a > b ? a : b;
   }
 
-  for (const vr of validRows) {
-    const existing = existingMap.get(vr.phone);
+  for (const vr of matchedRows) {
+    const existing = existingMap.get(vr.phone)!;
 
     if (!leadStates.has(vr.phone)) {
-      if (existing) {
-        leadStates.set(vr.phone, {
-          id: existing.id,
-          total_call_attempts: existing.total_call_attempts ?? 0,
-          total_callbacks: existing.total_callbacks ?? 0,
-          total_voicemails: existing.total_voicemails ?? 0,
-          has_bad_phone: existing.has_bad_phone ?? false,
-          first_seen_date: existing.first_seen_date,
-          first_contact_date: existing.first_contact_date,
-          first_callback_date: existing.first_callback_date,
-          first_quote_date: existing.first_quote_date,
-          first_sold_date: existing.first_sold_date,
-          first_daily_call_date: existing.first_daily_call_date,
-          latest_call_date: existing.latest_call_date,
-          current_status: vr.currentStatus,
-          current_lead_type: vr.leadType,
-          latest_vendor_name: vr.hint,
-          isNew: false,
-        });
-      } else {
-        leadStates.set(vr.phone, {
-          id: '', // filled after insert
-          total_call_attempts: 0,
-          total_callbacks: 0,
-          total_voicemails: 0,
-          has_bad_phone: false,
-          first_seen_date: vr.callDateStr,
-          first_contact_date: null,
-          first_callback_date: null,
-          first_quote_date: null,
-          first_sold_date: null,
-          first_daily_call_date: vr.callDateStr,
-          latest_call_date: vr.callDateStr,
-          current_status: vr.currentStatus,
-          current_lead_type: vr.leadType,
-          latest_vendor_name: vr.hint,
-          isNew: true,
-        });
-      }
+      leadStates.set(vr.phone, {
+        id: existing.id,
+        total_call_attempts: existing.total_call_attempts ?? 0,
+        total_callbacks: existing.total_callbacks ?? 0,
+        total_voicemails: existing.total_voicemails ?? 0,
+        has_bad_phone: existing.has_bad_phone ?? false,
+        first_seen_date: existing.first_seen_date,
+        first_contact_date: existing.first_contact_date,
+        first_callback_date: existing.first_callback_date,
+        first_quote_date: existing.first_quote_date,
+        first_sold_date: existing.first_sold_date,
+        first_daily_call_date: existing.first_daily_call_date,
+        latest_call_date: existing.latest_call_date,
+        current_status: vr.currentStatus,
+        current_lead_type: vr.leadType,
+        latest_vendor_name: vr.hint,
+      });
     }
 
     const state = leadStates.get(vr.phone)!;
@@ -603,65 +654,15 @@ export async function importDailyCallReport(
     }
   }
 
-  // ── Phase 3: Insert new leads ─────────────────────────────────────────────
+  // Ricochet (Phase 0) is the only source of new leads — Daily Call never
+  // inserts into `leads`. Rows without a matching phone were already dropped
+  // in Phase 2b above.
+  const newLeads = 0;
 
-  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: validRows.length });
-
-  let newLeads = 0;
-  const newPhones = [...leadStates.entries()].filter(([, s]) => s.isNew).map(([p]) => p);
-
-  if (newPhones.length > 0) {
-    // Insert in batches of 100
-    const BATCH = 100;
-    for (let i = 0; i < newPhones.length; i += BATCH) {
-      const batch = newPhones.slice(i, i + BATCH);
-      const inserts = batch.map((phone) => {
-        const s = leadStates.get(phone)!;
-        return {
-          agency_id: agencyId,
-          normalized_phone: phone,
-          raw_phone: phone,
-          current_lead_type: s.current_lead_type,
-          current_status: s.current_status,
-          first_seen_date: s.first_seen_date,
-          first_daily_call_date: s.first_daily_call_date,
-          latest_call_date: s.latest_call_date,
-          latest_vendor_name: s.latest_vendor_name,
-          total_call_attempts: s.total_call_attempts,
-          total_callbacks: s.total_callbacks,
-          total_voicemails: s.total_voicemails,
-          has_bad_phone: s.has_bad_phone,
-          first_contact_date: s.first_contact_date,
-          first_callback_date: s.first_callback_date,
-          first_quote_date: s.first_quote_date,
-          first_sold_date: s.first_sold_date,
-        };
-      });
-
-      const { data: created, error: createErr } = await supabase
-        .from('leads')
-        .insert(inserts)
-        .select('id, normalized_phone');
-
-      if (createErr) {
-        errors.push(`Batch insert error: ${createErr.message}`);
-        continue;
-      }
-
-      for (const row of created ?? []) {
-        const state = leadStates.get(row.normalized_phone);
-        if (state) {
-          state.id = row.id;
-          newLeads++;
-        }
-      }
-    }
-  }
-
-  // ── Phase 4: Update existing leads ────────────────────────────────────────
+  // ── Phase 3: Update existing leads ────────────────────────────────────────
 
   let updatedLeads = 0;
-  const toUpdate = [...leadStates.entries()].filter(([, s]) => !s.isNew && s.id);
+  const toUpdate = [...leadStates.entries()];
 
   for (const [, state] of toUpdate) {
     const { error } = await supabase
@@ -687,15 +688,15 @@ export async function importDailyCallReport(
     else errors.push(`Failed to update lead ${state.id}: ${error.message}`);
   }
 
-  // ── Phase 5: Insert call_events ───────────────────────────────────────────
+  // ── Phase 4: Insert call_events ───────────────────────────────────────────
 
-  onProgress?.({ phase: 'Saving call events…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Saving call events…', processed: 0, total: matchedRows.length });
 
   let rowsImported = 0;
   let rowsSkipped = 0;
 
   // Pre-fetch staff IDs for all unique user names
-  const uniqueUsers = [...new Set(validRows.map((r) => r.userName).filter(Boolean))];
+  const uniqueUsers = [...new Set(matchedRows.map((r) => r.userName).filter(Boolean))];
   const staffIds = new Map<string, string | null>();
   for (const user of uniqueUsers) {
     staffIds.set(user, await getOrCreateStaff(user, agencyId));
@@ -705,7 +706,7 @@ export async function importDailyCallReport(
   const callEventBatch: Record<string, unknown>[] = [];
   const rawRowBatch: Record<string, unknown>[] = [];
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const state = leadStates.get(vr.phone);
     if (!state?.id) {
       rowsSkipped++;
@@ -777,13 +778,26 @@ export async function importDailyCallReport(
     if (error) errors.push(`raw_daily_call_rows batch error: ${error.message}`);
   }
 
+  // Persist unmatched-phone skips to import_errors so users can investigate
+  // rows that were dropped because their phone isn't in the lead set.
+  if (unmatchedErrors.length > 0) {
+    const ERR_BATCH = 500;
+    for (let i = 0; i < unmatchedErrors.length; i += ERR_BATCH) {
+      const { error } = await supabase
+        .from('import_errors')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .insert(unmatchedErrors.slice(i, i + ERR_BATCH) as any);
+      if (error) errors.push(`import_errors batch error: ${error.message}`);
+    }
+  }
+
   // Finalise upload record
   await supabase
     .from('uploads')
     .update({
       status: errors.length > 0 ? 'complete_with_errors' : 'complete',
       matched_count: rowsImported,
-      unmatched_count: rowsSkipped + rowsFiltered,
+      unmatched_count: rowsSkipped + rowsFiltered + rowsSkippedUnmatched,
       error_count: errors.length,
     })
     .eq('id', uploadId);
@@ -794,6 +808,7 @@ export async function importDailyCallReport(
     rowsImported,
     rowsFiltered,
     rowsSkipped,
+    rowsSkippedUnmatched,
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
@@ -934,9 +949,36 @@ export async function importDeerDamaReport(
     });
   }
 
-  // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
+  // ── Phase 1b: Skip rows whose phone is not in leads ────────────────────
+  // Phase 0 (Ricochet) is the authoritative source of new leads. Any Deer
+  // Dama row whose phone is not present in `leads` (either pre-existing or
+  // just created by Phase 0) is logged to `import_errors` and dropped here
+  // BEFORE any derived-table writes (leads upserts / raw rows / staff
+  // history).
+  //
+  // This runs regardless of `force`: it only affects rows whose phone is
+  // missing from leads, not duplicate-file re-imports.
+
   onProgress?.({ phase: 'Looking up existing leads…', processed: 0, total: validRows.length });
 
+  const allPhones = [...new Set(validRows.map((r) => r.phone))];
+  const existingPhoneMap = await bulkLookupLeadsByPhone(allPhones, agencyId);
+
+  const unmatchedErrors: UnmatchedError[] = [];
+  const matchedRows = validRows.filter((vr) => {
+    if (existingPhoneMap.has(vr.phone)) return true;
+    unmatchedErrors.push({
+      upload_id: uploadId,
+      row_number: vr.rowNum,
+      error_type: 'phone_not_in_leads',
+      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+      raw_data: vr.raw,
+    });
+    return false;
+  });
+  const rowsSkippedUnmatched = unmatchedErrors.length;
+
+  // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
   type ExistingLead = {
     id: string;
     first_contact_date: string | null;
@@ -944,8 +986,8 @@ export async function importDeerDamaReport(
     first_sold_date: string | null;
   };
 
-  const uniquePhones = [...new Set(validRows.map((r) => r.phone))];
-  const uniqueExternalIds = [...new Set(validRows.map((r) => r.externalId).filter(Boolean))];
+  const uniquePhones = [...new Set(matchedRows.map((r) => r.phone))];
+  const uniqueExternalIds = [...new Set(matchedRows.map((r) => r.externalId).filter(Boolean))];
 
   const phoneMap = new Map<string, ExistingLead>();
   const externalIdMap = new Map<string, ExistingLead>();
@@ -1013,7 +1055,7 @@ export async function importDeerDamaReport(
 
   const leadStates = new Map<string, LeadState>();
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const viaExternal = vr.externalId ? externalIdMap.get(vr.externalId) ?? null : null;
     const viaPhone = phoneMap.get(vr.phone) ?? null;
     const existing = viaExternal ?? viaPhone;
@@ -1070,7 +1112,7 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 3: Batch-insert new leads ─────────────────────────────────────
-  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Creating new leads…', processed: 0, total: matchedRows.length });
 
   const newStates = [...leadStates.values()].filter((s) => s.isNew);
   const INSERT_BATCH = 100;
@@ -1116,7 +1158,7 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 4: Update existing leads ──────────────────────────────────────
-  onProgress?.({ phase: 'Updating existing leads…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Updating existing leads…', processed: 0, total: matchedRows.length });
 
   const toUpdate = [...leadStates.values()].filter((s) => !s.isNew && s.id);
   for (const s of toUpdate) {
@@ -1148,9 +1190,9 @@ export async function importDeerDamaReport(
   }
 
   // ── Phase 5: Resolve staff IDs + batch-insert raw rows & staff history ─
-  onProgress?.({ phase: 'Saving raw rows…', processed: 0, total: validRows.length });
+  onProgress?.({ phase: 'Saving raw rows…', processed: 0, total: matchedRows.length });
 
-  const uniqueOwners = [...new Set(validRows.map((r) => r.leadOwner).filter(Boolean))];
+  const uniqueOwners = [...new Set(matchedRows.map((r) => r.leadOwner).filter(Boolean))];
   const staffIds = new Map<string, string | null>();
   for (const owner of uniqueOwners) {
     staffIds.set(owner, await getOrCreateStaff(owner, agencyId));
@@ -1159,7 +1201,7 @@ export async function importDeerDamaReport(
   const rawBatch: Record<string, unknown>[] = [];
   const historyBatch: Record<string, unknown>[] = [];
 
-  for (const vr of validRows) {
+  for (const vr of matchedRows) {
     const state = leadStates.get(vr.phone);
     if (!state?.id) {
       rowsSkipped++;
@@ -1221,12 +1263,25 @@ export async function importDeerDamaReport(
     if (error) errors.push(`lead_staff_history batch error: ${error.message}`);
   }
 
+  // Persist unmatched-phone skips to import_errors so users can investigate
+  // rows that were dropped because their phone isn't in the lead set.
+  if (unmatchedErrors.length > 0) {
+    const ERR_BATCH = 500;
+    for (let i = 0; i < unmatchedErrors.length; i += ERR_BATCH) {
+      const { error } = await supabase
+        .from('import_errors')
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .insert(unmatchedErrors.slice(i, i + ERR_BATCH) as any);
+      if (error) errors.push(`import_errors batch error: ${error.message}`);
+    }
+  }
+
   await supabase
     .from('uploads')
     .update({
       status: errors.length > 0 ? 'complete_with_errors' : 'complete',
       matched_count: rowsImported,
-      unmatched_count: rowsSkipped,
+      unmatched_count: rowsSkipped + rowsSkippedUnmatched,
       error_count: errors.length,
     })
     .eq('id', uploadId);
@@ -1237,6 +1292,7 @@ export async function importDeerDamaReport(
     rowsImported,
     rowsFiltered: 0,
     rowsSkipped,
+    rowsSkippedUnmatched,
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
@@ -1248,34 +1304,65 @@ export async function importDeerDamaReport(
  * Both uploads share a batch_id. If the second importer fails, the first
  * upload is cascade-deleted so no half-imported state remains.
  */
-export async function importBatch(
-  dailyCallFile: File,
-  deerDamaFile: File,
-  agencyId: string,
-  uploadDate: string,
-  notes: string,
-  onProgress: (p: BatchProgress) => void,
-  force: boolean,
-): Promise<BatchResult> {
+/**
+ * Orchestrate a three-phase batch import: Ricochet (Phase 0), Daily Call
+ * (Phase 1), and Deer Dama (Phase 2). Runs Phase 0 parse + match detection
+ * up front and pauses with `status: 'needs_requote_review'` if any incoming
+ * Ricochet rows match existing leads — the caller must then collect user
+ * decisions and invoke `resumeBatch` to commit.
+ *
+ * When no matches exist (or `force: true` is irrelevant to matches), runs
+ * straight through to completion.
+ *
+ * Returns a discriminated union:
+ *   - `{ status: 'success', result }`           — all three phases committed
+ *   - `{ status: 'duplicate', duplicateOf }`    — one or more file hashes
+ *                                                 collide with a prior upload
+ *                                                 (no writes occurred)
+ *   - `{ status: 'needs_requote_review', … }`   — Phase 0 detected existing
+ *                                                 matches; caller must resume
+ *                                                 (no writes occurred)
+ */
+export async function importBatch(params: {
+  ricochetFile: File;
+  dailyCallFile: File;
+  deerDamaFile: File;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}): Promise<ImportBatchResult> {
+  const {
+    ricochetFile,
+    dailyCallFile,
+    deerDamaFile,
+    agencyId,
+    uploadDate,
+    notes,
+    onProgress,
+    force,
+  } = params;
+
   const batchId = crypto.randomUUID();
 
-  // Duplicate check both files BEFORE any write so we can prompt once.
+  // Duplicate check all three files BEFORE any write so we can prompt once.
   if (!force) {
-    const [dailyHash, deerHash] = await Promise.all([
+    const [ricoHash, dailyHash, deerHash] = await Promise.all([
+      computeFileHash(ricochetFile),
       computeFileHash(dailyCallFile),
       computeFileHash(deerDamaFile),
     ]);
-    const [dailyDupe, deerDupe] = await Promise.all([
+    const [ricoDupe, dailyDupe, deerDupe] = await Promise.all([
+      findDuplicateUpload(ricoHash, agencyId),
       findDuplicateUpload(dailyHash, agencyId),
       findDuplicateUpload(deerHash, agencyId),
     ]);
-    if (dailyDupe || deerDupe) {
+    if (ricoDupe || dailyDupe || deerDupe) {
       return {
-        batchId,
-        dailyCall: emptyResult(),
-        deerDama: emptyResult(),
-        rolledBack: false,
+        status: 'duplicate',
         duplicateOf: {
+          ricochet: ricoDupe ?? undefined,
           dailyCall: dailyDupe ?? undefined,
           deerDama: deerDupe ?? undefined,
         },
@@ -1283,35 +1370,211 @@ export async function importBatch(
     }
   }
 
-  // Forward the caller's `force` to per-importers so that file_hash is written
-  // correctly: hashed when force=false (preserves future dedup detection), null
-  // when force=true (the user overrode). The per-importers will re-check for
-  // duplicates, which is redundant when importBatch already checked above, but
-  // the redundant check returns the same result and writing the hash matters.
+  // ---------- Phase 0 (read-only): parse Ricochet + detect matches ----------
+  onProgress({
+    currentFile: 'ricochet',
+    fileIndex: 0,
+    phase: 'Parsing Ricochet file…',
+    processed: 0,
+    total: 0,
+  });
 
-  // Phase 1: Daily Call
-  const dailyCall = await importDailyCallReport(
-    dailyCallFile,
+  const parsed = await parseRicochetFile(ricochetFile);
+
+  onProgress({
+    currentFile: 'ricochet',
+    fileIndex: 0,
+    phase: 'Detecting existing leads…',
+    processed: 0,
+    total: parsed.rows.length,
+  });
+
+  const matches = await detectRicochetMatches(parsed.rows, agencyId);
+
+  if (matches.length > 0) {
+    // Pause for interactive requote review. No DB writes have happened.
+    return {
+      status: 'needs_requote_review',
+      pendingBatchId: batchId,
+      matches,
+      parsedState: {
+        ricochetFile,
+        ricochetRows: parsed.rows,
+        ricochetParseErrors: parsed.errors,
+        existingMatches: matches,
+        dailyCallFile,
+        deerDamaFile,
+      },
+    };
+  }
+
+  // No matches — default every row to a "new lead" write and commit straight
+  // through.
+  return finalizeBatch({
+    batchId,
     agencyId,
     uploadDate,
     notes,
-    (p) => onProgress({ currentFile: 'daily_call', fileIndex: 1, ...p }),
+    ricochetFile,
+    parsedRicochet: parsed,
+    existingMatches: [],
+    decisions: new Map(),
+    dailyCallFile,
+    deerDamaFile,
+    onProgress,
     force,
-    batchId,
-  );
+  });
+}
 
-  if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
-    // Daily Call failed outright. Wipe its uploads row (and any derived rows)
-    // via batch_id so no orphaned record remains.
+/**
+ * Shared commit path for both the straight-through and the post-review
+ * (resumeBatch) cases. Performs Phase 0 writes, then Phase 1 (Daily Call),
+ * then Phase 2 (Deer Dama). Any failure triggers a full `safeRollback` via
+ * the shared `batchId`, which cascades through every uploads row (including
+ * the Ricochet uploads row inserted here).
+ */
+interface FinalizeParams {
+  batchId: string;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  ricochetFile: File;
+  parsedRicochet: { rows: RicochetRow[]; errors: RicochetRowParseError[] };
+  existingMatches: RicochetMatch[];
+  decisions: Map<string, RicochetDecision>;
+  dailyCallFile: File;
+  deerDamaFile: File;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}
+
+async function finalizeBatch(p: FinalizeParams): Promise<ImportBatchResult> {
+  const {
+    batchId,
+    agencyId,
+    uploadDate,
+    notes,
+    ricochetFile,
+    parsedRicochet,
+    existingMatches,
+    decisions,
+    dailyCallFile,
+    deerDamaFile,
+    onProgress,
+    force,
+  } = p;
+
+  // ---------- Phase 0: Ricochet ----------
+  let ricochetSummary: RicochetWriteSummary;
+  try {
+    onProgress({
+      currentFile: 'ricochet',
+      fileIndex: 0,
+      phase: 'Writing Ricochet rows…',
+      processed: 0,
+      total: parsedRicochet.rows.length,
+    });
+
+    // The orchestrator creates the uploads row for Ricochet (unlike DC/DD,
+    // which create their own) because writeRicochetPhase expects uploadId
+    // pre-set for its raw_ricochet_rows inserts.
+    const ricoHash = await computeFileHash(ricochetFile);
+    const { data: upRow, error: upErr } = await supabase
+      .from('uploads')
+      .insert({
+        agency_id: agencyId,
+        file_name: ricochetFile.name,
+        report_type: REPORT_TYPES.RICOCHET_LEAD_LIST,
+        upload_date: uploadDate,
+        notes,
+        status: 'processing',
+        row_count: parsedRicochet.rows.length,
+        // Match DC/DD pattern: store hash only when not forcing; `force=true`
+        // means the user overrode and we leave hash null so subsequent
+        // imports of the same file aren't flagged.
+        file_hash: force ? null : ricoHash,
+        batch_id: batchId,
+      })
+      .select('id')
+      .single();
+    if (upErr || !upRow) {
+      throw new Error(
+        'Failed to create Ricochet upload record: ' +
+          (upErr?.message ?? 'unknown error'),
+      );
+    }
+    const ricochetUploadId = upRow.id as string;
+
+    const matchMap = new Map<string, RicochetMatch['existing']>(
+      existingMatches.map((m) => [m.incoming.phoneNormalized, m.existing]),
+    );
+
+    ricochetSummary = await writeRicochetPhase({
+      uploadId: ricochetUploadId,
+      batchId,
+      agencyId,
+      rows: parsedRicochet.rows,
+      existingMatches: matchMap,
+      decisions,
+      parseErrors: parsedRicochet.errors,
+    });
+
+    await supabase
+      .from('uploads')
+      .update({
+        status:
+          ricochetSummary.errors.length > 0 ? 'complete_with_errors' : 'complete',
+        matched_count: ricochetSummary.rowsUpdated,
+        unmatched_count: ricochetSummary.rowsImported,
+        error_count: ricochetSummary.errors.length,
+      })
+      .eq('id', ricochetUploadId);
+  } catch (err) {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
-      'daily_call',
-      new Error(dailyCall.errors.join('; ')),
+      'ricochet',
+      err instanceof Error ? err : new Error(String(err)),
       rollbackErr ?? undefined,
     );
   }
 
-  // Phase 2: Deer Dama
+  // ---------- Phase 1: Daily Call ----------
+  // The hash check was already done in importBatch, so force=true here keeps
+  // the per-importer from re-flagging the duplicate (its fallback still runs
+  // but returns a no-op). However, per DC/DD semantics, `force=true` causes
+  // them to write `file_hash: null`. To preserve future dedup detection we
+  // pass the caller's original `force` — the per-importer's redundant dup
+  // check will be a no-op since the prior duplicate was already rejected in
+  // importBatch.
+  let dailyCall: ImportResult;
+  try {
+    dailyCall = await importDailyCallReport(
+      dailyCallFile,
+      agencyId,
+      uploadDate,
+      notes,
+      (pg) =>
+        onProgress({
+          currentFile: 'daily_call',
+          fileIndex: 1,
+          ...pg,
+        }),
+      force,
+      batchId,
+    );
+    if (dailyCall.errors.length > 0 && dailyCall.rowsImported === 0) {
+      throw new Error(dailyCall.errors.join('; '));
+    }
+  } catch (err) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'daily_call',
+      err instanceof Error ? err : new Error(String(err)),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  // ---------- Phase 2: Deer Dama ----------
   let deerDama: ImportResult;
   try {
     deerDama = await importDeerDamaReport(
@@ -1319,10 +1582,18 @@ export async function importBatch(
       agencyId,
       uploadDate,
       notes,
-      (p) => onProgress({ currentFile: 'deer_dama', fileIndex: 2, ...p }),
+      (pg) =>
+        onProgress({
+          currentFile: 'deer_dama',
+          fileIndex: 2,
+          ...pg,
+        }),
       force,
       batchId,
     );
+    if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
+      throw new Error(deerDama.errors.join('; '));
+    }
   } catch (err) {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
@@ -1332,16 +1603,77 @@ export async function importBatch(
     );
   }
 
-  if (deerDama.errors.length > 0 && deerDama.rowsImported === 0) {
+  // ---------- Commit: apply deferred Ricochet overwrite UPDATEs ----------
+  // These were collected (not applied) in Phase 0 so a Phase 1/2 failure
+  // could rollback without leaving pre-existing leads in a half-overwritten
+  // state. Apply them now that both Phase 1 and Phase 2 have succeeded.
+  try {
+    await commitRicochetOverwrites(ricochetSummary.pendingOverwrites);
+  } catch (err) {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
-      'deer_dama',
-      new Error(deerDama.errors.join('; ')),
+      'ricochet',
+      err instanceof Error ? err : new Error(String(err)),
       rollbackErr ?? undefined,
     );
   }
 
-  return { batchId, dailyCall, deerDama, rolledBack: false };
+  return {
+    status: 'success',
+    result: {
+      batchId,
+      ricochet: ricochetSummary,
+      dailyCall,
+      deerDama,
+      rolledBack: false,
+    },
+  };
+}
+
+/**
+ * Resume a paused batch after the user has reviewed requote matches and
+ * chosen 'requote' or 'overwrite' for each. Uses the same `pendingBatchId`
+ * issued by the initial `importBatch` call so rollback and duplicate-hash
+ * semantics stay consistent.
+ */
+export async function resumeBatch(params: {
+  pendingBatchId: string;
+  decisions: Map<string, RicochetDecision>;
+  parsedState: ParsedBatchState;
+  agencyId: string;
+  uploadDate: string;
+  notes: string;
+  onProgress: (p: BatchProgress) => void;
+  force: boolean;
+}): Promise<ImportBatchResult> {
+  const {
+    pendingBatchId,
+    decisions,
+    parsedState,
+    agencyId,
+    uploadDate,
+    notes,
+    onProgress,
+    force,
+  } = params;
+
+  return finalizeBatch({
+    batchId: pendingBatchId,
+    agencyId,
+    uploadDate,
+    notes,
+    ricochetFile: parsedState.ricochetFile,
+    parsedRicochet: {
+      rows: parsedState.ricochetRows,
+      errors: parsedState.ricochetParseErrors,
+    },
+    existingMatches: parsedState.existingMatches,
+    decisions,
+    dailyCallFile: parsedState.dailyCallFile,
+    deerDamaFile: parsedState.deerDamaFile,
+    onProgress,
+    force,
+  });
 }
 
 /** Fire-and-forget rollback; returns the error (if any) without throwing. */
@@ -1352,19 +1684,6 @@ async function safeRollback(batchId: string): Promise<Error | null> {
   } catch (err) {
     return err instanceof Error ? err : new Error(String(err));
   }
-}
-
-function emptyResult(): ImportResult {
-  return {
-    uploadId: '',
-    rowsTotal: 0,
-    rowsImported: 0,
-    rowsFiltered: 0,
-    rowsSkipped: 0,
-    newLeads: 0,
-    updatedLeads: 0,
-    errors: [],
-  };
 }
 
 /**
