@@ -763,7 +763,7 @@ export function useSalesData(filters: Filters) {
       const totalHouseholds = householdMap.size;
       const totalItems = events.reduce((s, e) => s + (e.items ?? 1), 0);
       const totalPolicies = events.length;
-      const totalPremium = events.reduce((s, e) => s + (Number(e.premium) ?? 0), 0);
+      const totalPremium = events.reduce((s, e) => s + (Number(e.premium) || 0), 0);
 
       // Households with both Home Insurance and Auto Insurance
       let homeAndAutoCount = 0;
@@ -795,7 +795,7 @@ export function useSalesData(filters: Filters) {
         agg.households.add(ev.sale_id);
         agg.items += ev.items ?? 1;
         agg.policies += 1;
-        agg.premium += Number(ev.premium) ?? 0;
+        agg.premium += Number(ev.premium) || 0;
       }
 
       const byProducer: SalesProducerRow[] = [...byProducerMap.entries()].map(([name, agg]) => ({
@@ -818,7 +818,7 @@ export function useSalesData(filters: Filters) {
         const agg = byTypeMap.get(key)!;
         agg.count += 1;
         agg.totalItems += ev.items ?? 1;
-        agg.totalPremium += Number(ev.premium) ?? 0;
+        agg.totalPremium += Number(ev.premium) || 0;
       }
 
       const byPolicyType: SalesPolicyTypeRow[] = [...byTypeMap.entries()].map(([policyType, agg]) => ({
@@ -912,7 +912,7 @@ export function useROIData(filters: Filters) {
       const salesEvents = salesData ?? [];
 
       // ── Aggregate metrics ────────────────────────────────────────────────
-      const totalLeadSpend = leads.reduce((s, l) => s + (Number(l.lead_cost) ?? 0), 0);
+      const totalLeadSpend = leads.reduce((s, l) => s + (Number(l.lead_cost) || 0), 0);
       const totalLeads = leads.length;
       const totalContactedLeads = leads.filter((l) => l.first_contact_date != null).length;
       const totalQuotedHouseholds = leads.filter((l) => l.first_quote_date != null).length;
@@ -924,7 +924,7 @@ export function useROIData(filters: Filters) {
         householdMap.get(ev.sale_id)!.push(ev);
       }
       const totalHouseholdsSold = householdMap.size;
-      const totalPremium = salesEvents.reduce((s, e) => s + (Number(e.premium) ?? 0), 0);
+      const totalPremium = salesEvents.reduce((s, e) => s + (Number(e.premium) || 0), 0);
 
       let totalItemsSold = 0;
       let totalPoliciesSold = 0;
@@ -971,7 +971,7 @@ export function useROIData(filters: Filters) {
         }
         const agg = byCampaignMap.get(key)!;
         agg.leads++;
-        agg.spend += Number(lead.lead_cost) ?? 0;
+        agg.spend += Number(lead.lead_cost) || 0;
         if (lead.first_contact_date) agg.contacted++;
         if (lead.first_quote_date) agg.quoted++;
         if (lead.first_sold_date) agg.sold++;
