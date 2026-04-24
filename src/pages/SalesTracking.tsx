@@ -12,7 +12,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { useSalesData } from '@/hooks/useLeadData';
 import type { Filters } from '@/hooks/useLeadData';
-import { DollarSign, ShoppingBag, Users, FileText, TrendingUp } from 'lucide-react';
+import { DollarSign, ShoppingBag, Users, FileText, TrendingUp, Award } from 'lucide-react';
 
 const defaultFilters: Filters = {
   dateRange: 'all',
@@ -90,7 +90,7 @@ export default function SalesTracking() {
       </div>
 
       {/* ── KPI Cards ────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3 mb-8">
         <KPICard
           label="Households Sold"
           value={kpis ? fmt(kpis.totalHouseholds) : '—'}
@@ -125,6 +125,24 @@ export default function SalesTracking() {
           label="Avg Policies / HH"
           value={kpis ? fmt(kpis.avgPoliciesPerHousehold, 2) : '—'}
           icon={<TrendingUp className="w-4 h-4" />}
+          loading={isLoading}
+        />
+        <KPICard
+          label="Avg Points / HH"
+          value={kpis ? fmt(kpis.avgPointsPerHousehold, 2) : '—'}
+          icon={<Award className="w-4 h-4" />}
+          loading={isLoading}
+        />
+        <KPICard
+          label="Avg Points / Item"
+          value={kpis ? fmt(kpis.avgPointsPerItem, 2) : '—'}
+          icon={<Award className="w-4 h-4" />}
+          loading={isLoading}
+        />
+        <KPICard
+          label="Avg Points / Policy"
+          value={kpis ? fmt(kpis.avgPointsPerPolicy, 2) : '—'}
+          icon={<Award className="w-4 h-4" />}
           loading={isLoading}
         />
         <KPICard

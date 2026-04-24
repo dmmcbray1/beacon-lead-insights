@@ -796,8 +796,12 @@ export interface SalesKPIs {
   totalItems: number;
   totalPolicies: number;
   totalPremium: number;
+  totalPoints: number;
   avgItemsPerHousehold: number;
   avgPoliciesPerHousehold: number;
+  avgPointsPerHousehold: number;
+  avgPointsPerItem: number;
+  avgPointsPerPolicy: number;
   pctHomeAndAuto: number;
 }
 
@@ -848,6 +852,7 @@ export function useSalesData(filters: Filters) {
       const totalItems = events.reduce((s, e) => s + (e.items ?? 1), 0);
       const totalPolicies = events.length;
       const totalPremium = events.reduce((s, e) => s + (Number(e.premium) || 0), 0);
+      const totalPoints = events.reduce((s, e) => s + (Number(e.points) || 0), 0);
 
       // Households with both Home Insurance and Auto Insurance
       let homeAndAutoCount = 0;
@@ -861,8 +866,12 @@ export function useSalesData(filters: Filters) {
         totalItems,
         totalPolicies,
         totalPremium,
+        totalPoints,
         avgItemsPerHousehold: totalHouseholds > 0 ? totalItems / totalHouseholds : 0,
         avgPoliciesPerHousehold: totalHouseholds > 0 ? totalPolicies / totalHouseholds : 0,
+        avgPointsPerHousehold: totalHouseholds > 0 ? totalPoints / totalHouseholds : 0,
+        avgPointsPerItem: totalItems > 0 ? totalPoints / totalItems : 0,
+        avgPointsPerPolicy: totalPolicies > 0 ? totalPoints / totalPolicies : 0,
         pctHomeAndAuto: totalHouseholds > 0 ? (homeAndAutoCount / totalHouseholds) * 100 : 0,
       };
 
