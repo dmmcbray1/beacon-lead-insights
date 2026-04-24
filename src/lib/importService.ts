@@ -19,6 +19,7 @@ import {
   parseRicochetFile,
   detectRicochetMatches,
   writeRicochetPhase,
+  commitRicochetOverwrites,
 } from './importRicochet';
 import type { RicochetRow, RicochetRowParseError } from './ricochetParser';
 import {
@@ -1670,6 +1671,21 @@ async function finalizeBatch(p: FinalizeParams): Promise<ImportBatchResult> {
     const rollbackErr = await safeRollback(batchId);
     throw new BatchRollbackError(
       'deer_dama',
+      err instanceof Error ? err : new Error(String(err)),
+      rollbackErr ?? undefined,
+    );
+  }
+
+  // ---------- Commit: apply deferred Ricochet overwrite UPDATEs ----------
+  // These were collected (not applied) in Phase 0 so a Phase 1/2 failure
+  // could rollback without leaving pre-existing leads in a half-overwritten
+  // state. Apply them now that both Phase 1 and Phase 2 have succeeded.
+  try {
+    await commitRicochetOverwrites(ricochetSummary.pendingOverwrites);
+  } catch (err) {
+    const rollbackErr = await safeRollback(batchId);
+    throw new BatchRollbackError(
+      'ricochet',
       err instanceof Error ? err : new Error(String(err)),
       rollbackErr ?? undefined,
     );

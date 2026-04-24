@@ -24,11 +24,17 @@ export interface ParsedRicochetFile {
   errors: RicochetRowParseError[];
 }
 
+export interface PendingLeadOverwrite {
+  leadId: string;
+  fields: Record<string, unknown>;
+}
+
 export interface RicochetWriteSummary {
   rowsImported: number;   // new leads created
-  rowsUpdated: number;    // existing leads overwritten
+  rowsUpdated: number;    // existing leads to be overwritten (applied by commitRicochetOverwrites)
   requotesLogged: number; // total requote events
   errors: RicochetRowParseError[];
+  pendingOverwrites: PendingLeadOverwrite[];
 }
 
 export type RicochetDecision = 'requote' | 'overwrite';
@@ -184,6 +190,7 @@ export async function writeRicochetPhase(params: {
   let rowsImported = 0;
   let rowsUpdated = 0;
   let requotesLogged = 0;
+  const pendingOverwrites: PendingLeadOverwrite[] = [];
 
   for (const r of rows) {
     const match = existingMatches.get(r.phoneNormalized);
@@ -214,14 +221,14 @@ export async function writeRicochetPhase(params: {
     }
 
     // Match — log requote event regardless of decision.
+    // NOTE: overwrite UPDATEs are DEFERRED until after Phase 1/2 succeed, so
+    // a later-phase failure can still rollback cleanly via deleteBatch
+    // (which only cascades rows created in this batch). We collect the
+    // pending updates here and apply them via commitRicochetOverwrites.
     if (decision === 'overwrite') {
       const merged = mergeLeadOverwrite(r);
       if (Object.keys(merged).length > 0) {
-        const { error: updErr } = await supabase
-          .from('leads')
-          .update(merged)
-          .eq('id', match.id);
-        if (updErr) throw updErr;
+        pendingOverwrites.push({ leadId: match.id, fields: merged });
       }
       rowsUpdated++;
     }
@@ -241,5 +248,25 @@ export async function writeRicochetPhase(params: {
     requotesLogged++;
   }
 
-  return { rowsImported, rowsUpdated, requotesLogged, errors: parseErrors };
+  return { rowsImported, rowsUpdated, requotesLogged, errors: parseErrors, pendingOverwrites };
+}
+
+/**
+ * Apply deferred overwrite UPDATEs collected by `writeRicochetPhase`.
+ *
+ * Called by `finalizeBatch` after Phase 1 and Phase 2 succeed, so a
+ * mid-batch failure can rollback cleanly without leaving pre-existing
+ * leads in a half-overwritten state. Throws on first failure — the
+ * caller is expected to call `safeRollback(batchId)`.
+ */
+export async function commitRicochetOverwrites(
+  pending: PendingLeadOverwrite[],
+): Promise<void> {
+  for (const upd of pending) {
+    const { error } = await supabase
+      .from('leads')
+      .update(upd.fields)
+      .eq('id', upd.leadId);
+    if (error) throw error;
+  }
 }
