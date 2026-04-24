@@ -1813,7 +1813,49 @@ async function safeRollback(batchId: string): Promise<Error | null> {
  *
  * Throws on RLS denial or network error.
  */
+/**
+ * Delete sales_events tied to an upload, then delete any auto-created
+ * re_quote leads whose only source was that upload (lead_id on the event
+ * points back to a lead with no call history).
+ */
+async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
+  if (uploadIds.length === 0) return;
+
+  // 1. Find leads auto-created by this upload (total_call_attempts = 0,
+  //    meaning they were created by the Sales Log and never called)
+  const { data: events } = await supabase
+    .from('sales_events')
+    .select('lead_id')
+    .in('upload_id', uploadIds);
+
+  const autoLeadIds = [...new Set(
+    (events ?? [])
+      .map((e: { lead_id: string | null }) => e.lead_id)
+      .filter(Boolean) as string[]
+  )];
+
+  // 2. Of those leads, only delete ones with no call history
+  //    (total_call_attempts = 0 — they were created purely by Sales Log)
+  if (autoLeadIds.length > 0) {
+    const { data: autoLeads } = await supabase
+      .from('leads')
+      .select('id')
+      .in('id', autoLeadIds)
+      .eq('total_call_attempts', 0);
+
+    const idsToDelete = (autoLeads ?? []).map((l: { id: string }) => l.id);
+    if (idsToDelete.length > 0) {
+      await supabase.from('leads').delete().in('id', idsToDelete);
+    }
+  }
+
+  // 3. Delete the sales_events rows
+  await supabase.from('sales_events').delete().in('upload_id', uploadIds);
+}
+
 export async function deleteUpload(uploadId: string): Promise<void> {
+  // Clean up sales_events and auto-created leads first
+  await deleteSalesLogData([uploadId]);
   const { error } = await supabase.from('uploads').delete().eq('id', uploadId);
   if (error) throw new Error('Failed to delete upload: ' + error.message);
 }
@@ -1823,6 +1865,14 @@ export async function deleteUpload(uploadId: string): Promise<void> {
  * trash button and by importBatch's rollback path.
  */
 export async function deleteBatch(batchId: string): Promise<void> {
+  // Find all upload IDs in this batch first for sales cleanup
+  const { data: batchUploads } = await supabase
+    .from('uploads')
+    .select('id')
+    .eq('batch_id', batchId);
+  const uploadIds = (batchUploads ?? []).map((u: { id: string }) => u.id);
+  await deleteSalesLogData(uploadIds);
+
   const { error } = await supabase.from('uploads').delete().eq('batch_id', batchId);
   if (error) throw new Error('Failed to delete upload batch: ' + error.message);
 }
