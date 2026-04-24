@@ -15,7 +15,7 @@ export default function Dashboard() {
     agency: 'all',
     staff: 'all',
     leadType: 'all',
-    dateBasis: 'call_date',
+    dateBasis: 'lead_date',
     vendorFilter: true,
     customFrom: undefined,
     customTo: undefined,

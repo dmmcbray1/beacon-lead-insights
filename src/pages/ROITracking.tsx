@@ -19,7 +19,7 @@ const defaultFilters: Filters = {
   agency: 'all',
   staff: 'all',
   leadType: 'all',
-  dateBasis: 'call_date',
+  dateBasis: 'lead_date',
   customFrom: undefined,
   customTo: undefined,
 };

@@ -72,7 +72,7 @@ export default function FilterBar({ filters, onChange }: FilterBarProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="lead_created">Lead Created</SelectItem>
+            <SelectItem value="lead_date">Lead Date</SelectItem>
             <SelectItem value="call_date">Call Date</SelectItem>
             <SelectItem value="first_contact">First Contact</SelectItem>
             <SelectItem value="first_quote">First Quote</SelectItem>

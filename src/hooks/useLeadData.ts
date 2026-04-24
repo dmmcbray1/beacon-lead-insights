@@ -23,7 +23,7 @@ export interface Filters {
   agency: string;      // 'all' or agency UUID
   staff: string;       // 'all' or staff UUID
   leadType: string;    // 'all' | 'new' | 're_quote'
-  dateBasis: string;   // 'lead_created' | 'call_date' | 'first_contact' | 'first_quote' | 'callback_date'
+  dateBasis: string;   // 'lead_date' | 'call_date' | 'first_contact' | 'first_quote' | 'callback_date' | 'lead_created'
   vendorFilter?: boolean;
   customFrom?: string; // ISO date YYYY-MM-DD, used when dateRange === 'custom'
   customTo?: string;   // ISO date YYYY-MM-DD, used when dateRange === 'custom'
@@ -52,11 +52,12 @@ function getDateBounds(filters: Filters): { from: string | null; to: string | nu
 
 function getDateField(dateBasis: string): string {
   switch (dateBasis) {
+    case 'lead_date':      return 'lead_date';
     case 'call_date':      return 'latest_call_date';
     case 'first_contact':  return 'first_contact_date';
     case 'first_quote':    return 'first_quote_date';
     case 'callback_date':  return 'first_callback_date';
-    default:               return 'first_seen_date';
+    default:               return 'lead_date';
   }
 }
 
@@ -234,7 +235,8 @@ export function useLeads(filters: Filters) {
       if (staffLeadIds) query = query.in('id', staffLeadIds);
 
       if (from) query = query.gte(dateField, from);
-      if (to) query = query.lte(dateField, to + 'T23:59:59');
+      // lead_date is a DATE column — don't append a time component
+      if (to) query = query.lte(dateField, dateField === 'lead_date' ? to : to + 'T23:59:59');
 
       if (filters.leadType === 'new') query = query.eq('current_lead_type', 'new_lead');
       else if (filters.leadType === 're_quote') query = query.eq('current_lead_type', 're_quote');
@@ -721,7 +723,7 @@ export function useLeadList(filters: Filters & { search?: string }) {
       if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
       if (staffLeadIds) q = q.in('id', staffLeadIds);
       if (from) q = q.gte(dateField, from);
-      if (to) q = q.lte(dateField, to + 'T23:59:59');
+      if (to) q = q.lte(dateField, dateField === 'lead_date' ? to : to + 'T23:59:59');
       if (filters.leadType === 'new') q = q.eq('current_lead_type', 'new_lead');
       else if (filters.leadType === 're_quote') q = q.eq('current_lead_type', 're_quote');
 
