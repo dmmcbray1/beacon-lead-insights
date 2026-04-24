@@ -29,9 +29,9 @@ interface Props {
 
 function detectReportType(columns: string[]): string {
   const lowered = columns.map((c) => c.toLowerCase());
-  const dailyMatch = lowered.filter((c) => DAILY_CALL_COLUMNS.includes(c as any)).length;
-  const deerMatch  = lowered.filter((c) => DEER_DAMA_COLUMNS.includes(c as any)).length;
-  const ricoMatch  = lowered.filter((c) => RICOCHET_COLUMNS.includes(c as any)).length;
+  const dailyMatch = lowered.filter((c) => (DAILY_CALL_COLUMNS as readonly string[]).includes(c)).length;
+  const deerMatch  = lowered.filter((c) => (DEER_DAMA_COLUMNS as readonly string[]).includes(c)).length;
+  const ricoMatch  = lowered.filter((c) => (RICOCHET_COLUMNS as readonly string[]).includes(c)).length;
 
   // Pick the highest-scoring type that also meets the ≥5 threshold.
   // Ties broken in favor of Ricochet, then Deer Dama, then Daily Call

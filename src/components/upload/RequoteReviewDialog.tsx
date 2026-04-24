@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -116,13 +116,6 @@ function MatchCard({
   onChange: (d: RicochetDecision) => void;
 }) {
   const { incoming, existing } = match;
-
-  useMemo(() => {
-    // Reserved for future visual affordance: show a diff when overwrite
-    // would actually change a field. Blank incoming values preserve
-    // existing per spec, so no field is ever actually "wiped".
-    return new Set<string>();
-  }, [decision]);
 
   return (
     <div className="p-4">

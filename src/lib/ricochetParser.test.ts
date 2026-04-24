@@ -120,7 +120,7 @@ describe('dedupeRicochetRowsByPhone', () => {
       { rowNumber: 1, phoneNormalized: '2052063492', firstName: 'Old' },
       { rowNumber: 2, phoneNormalized: '9999999999', firstName: 'Other' },
       { rowNumber: 3, phoneNormalized: '2052063492', firstName: 'New' },
-    ] as any;
+    ] as unknown as Parameters<typeof dedupeRicochetRowsByPhone>[0];
     const { kept, dropped } = dedupeRicochetRowsByPhone(rows);
     expect(kept.map((r) => r.rowNumber)).toEqual([2, 3]);
     expect(dropped).toEqual([
