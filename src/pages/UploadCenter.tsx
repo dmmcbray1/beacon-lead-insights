@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, AlertTriangle, Loader2, Download } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Loader2, Download, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -24,6 +24,7 @@ import { REPORT_TYPES } from '@/lib/constants';
 import {
   importBatch,
   resumeBatch,
+  clearAllSalesData,
   BatchRollbackError,
   type BatchProgress,
   type BatchResult,
@@ -131,6 +132,34 @@ export default function UploadCenter() {
     { title: string; uploadId: string } | null
   >(null);
   const [ricochetErrorsModalOpen, setRicochetErrorsModalOpen] = useState(false);
+
+  // ── Clear Sales Data state ────────────────────────────────────────────────
+  const [clearSalesOpen, setClearSalesOpen] = useState(false);
+  const [clearSalesRunning, setClearSalesRunning] = useState(false);
+  const [clearSalesResult, setClearSalesResult] = useState<
+    { salesEventsDeleted: number; autoLeadsDeleted: number; leadsReset: number } | null
+  >(null);
+  const [clearSalesError, setClearSalesError] = useState<string | null>(null);
+
+  const runClearSalesData = async () => {
+    if (!agencyId) return;
+    setClearSalesRunning(true);
+    setClearSalesError(null);
+    setClearSalesResult(null);
+    try {
+      const res = await clearAllSalesData(agencyId);
+      setClearSalesResult(res);
+      await queryClient.invalidateQueries({ queryKey: ['leads'] });
+      await queryClient.invalidateQueries({ queryKey: ['leadList'] });
+      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+      await queryClient.invalidateQueries({ queryKey: ['staffPerf'] });
+    } catch (err) {
+      setClearSalesError(String(err));
+    } finally {
+      setClearSalesRunning(false);
+      setClearSalesOpen(false);
+    }
+  };
 
   const invalidateCaches = async () => {
     await queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -655,6 +684,76 @@ export default function UploadCenter() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={handleDuplicateCancel}>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDuplicateConfirm}>Import Anyway</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* ── Danger Zone ───────────────────────────────────────────────────── */}
+      {state.step === 'select' && (
+        <div className="mt-8 max-w-3xl">
+          <h3 className="section-title mb-4">Danger Zone</h3>
+          <div className="border border-destructive/50 rounded-lg bg-card p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground mb-1">
+                  Clear All Sales Data
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Deletes every sales_events row for this agency, removes
+                  auto-created sales log re-quote leads (no call activity),
+                  and resets the denormalized sold fields on all remaining
+                  leads. Use this to clean up orphaned sales data whose
+                  upload record has already been deleted.
+                </p>
+                {clearSalesResult && (
+                  <div className="mt-3 rounded-md border border-success/50 bg-success/10 px-3 py-2 text-xs text-foreground">
+                    Cleared {clearSalesResult.salesEventsDeleted} sales events,
+                    deleted {clearSalesResult.autoLeadsDeleted} auto-created leads,
+                    reset sold fields on {clearSalesResult.leadsReset} leads.
+                  </div>
+                )}
+                {clearSalesError && (
+                  <div className="mt-3 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {clearSalesError}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="destructive"
+                onClick={() => setClearSalesOpen(true)}
+                disabled={!agencyId || clearSalesRunning}
+                className="shrink-0"
+              >
+                {clearSalesRunning ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Clearing…</>
+                ) : (
+                  <><Trash2 className="w-4 h-4 mr-2" />Clear All Sales Data</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AlertDialog open={clearSalesOpen} onOpenChange={setClearSalesOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear all sales data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes every sales event for your agency,
+              removes auto-created sales log re-quote leads, and resets the
+              sold fields on all remaining leads. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={runClearSalesData}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Yes, clear all sales data
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

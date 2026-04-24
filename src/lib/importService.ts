@@ -1816,7 +1816,9 @@ async function safeRollback(batchId: string): Promise<Error | null> {
 /**
  * Delete sales_events tied to an upload, then delete any auto-created
  * re_quote leads whose only source was that upload (lead_id on the event
- * points back to a lead with no call history).
+ * points back to a lead with no call history). For remaining matched
+ * leads (those with call history that had sales data written to them),
+ * reset the denormalized sold fields to NULL.
  */
 async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
   if (uploadIds.length === 0) return;
@@ -1831,7 +1833,7 @@ async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
     throw new Error('Failed to read sales_events for cleanup: ' + eventsErr.message);
   }
 
-  const autoLeadIds = [...new Set(
+  const linkedLeadIds = [...new Set(
     (events ?? [])
       .map((e: { lead_id: string | null }) => e.lead_id)
       .filter((id): id is string => Boolean(id))
@@ -1850,31 +1852,127 @@ async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
     throw new Error('Failed to delete sales_events: ' + eventsDelErr.message);
   }
 
+  if (linkedLeadIds.length === 0) return;
+
   // 3. Of the linked leads, only delete ones with no call history —
   //    total_call_attempts = 0 means they were auto-created purely by
   //    the Sales Log importer and never touched by Daily Call / Deer Dama.
-  if (autoLeadIds.length > 0) {
-    const { data: autoLeads, error: autoLeadsErr } = await supabase
+  const { data: autoLeads, error: autoLeadsErr } = await supabase
+    .from('leads')
+    .select('id')
+    .in('id', linkedLeadIds)
+    .eq('total_call_attempts', 0);
+
+  if (autoLeadsErr) {
+    throw new Error('Failed to read auto-created leads: ' + autoLeadsErr.message);
+  }
+
+  const autoCreatedIds = (autoLeads ?? []).map((l: { id: string }) => l.id);
+  const autoCreatedSet = new Set(autoCreatedIds);
+  if (autoCreatedIds.length > 0) {
+    const { error: leadsDelErr } = await supabase
       .from('leads')
-      .select('id')
-      .in('id', autoLeadIds)
-      .eq('total_call_attempts', 0);
-
-    if (autoLeadsErr) {
-      throw new Error('Failed to read auto-created leads: ' + autoLeadsErr.message);
-    }
-
-    const idsToDelete = (autoLeads ?? []).map((l: { id: string }) => l.id);
-    if (idsToDelete.length > 0) {
-      const { error: leadsDelErr } = await supabase
-        .from('leads')
-        .delete()
-        .in('id', idsToDelete);
-      if (leadsDelErr) {
-        throw new Error('Failed to delete auto-created leads: ' + leadsDelErr.message);
-      }
+      .delete()
+      .in('id', autoCreatedIds);
+    if (leadsDelErr) {
+      throw new Error('Failed to delete auto-created leads: ' + leadsDelErr.message);
     }
   }
+
+  // 4. For remaining leads (matched via phone, had call history), reset the
+  //    denormalized sold fields that were written by the Sales Log importer.
+  //    The sales_events rows are gone, but these columns on `leads` also
+  //    need clearing so Sales Tracking / ROI reflect the deletion.
+  const matchedLeadIds = linkedLeadIds.filter((id) => !autoCreatedSet.has(id));
+  if (matchedLeadIds.length > 0) {
+    const { error: resetErr } = await supabase
+      .from('leads')
+      .update({
+        total_items_sold: null,
+        total_policies_sold: null,
+        total_premium: null,
+        first_sold_date: null,
+      })
+      .in('id', matchedLeadIds);
+    if (resetErr) {
+      throw new Error('Failed to reset sold fields on matched leads: ' + resetErr.message);
+    }
+  }
+}
+
+/**
+ * Wipe all Sales Log data for an agency. Unlike deleteSalesLogData (which is
+ * scoped to specific upload IDs), this clears ALL sales_events for the agency,
+ * deletes any leads that look like auto-created sales log re-quotes with no
+ * call activity, and resets the denormalized sold fields on every remaining
+ * lead that has them set. Used to clean up orphaned sales_events rows whose
+ * upload record no longer exists.
+ */
+export async function clearAllSalesData(agencyId: string): Promise<{
+  salesEventsDeleted: number;
+  autoLeadsDeleted: number;
+  leadsReset: number;
+}> {
+  // 1. Delete auto-created re-quote leads with no call activity.
+  //    These are leads created solely by the Sales Log importer when the
+  //    incoming policy had no matching phone in `leads`.
+  const { data: autoLeads, error: autoLeadsErr } = await supabase
+    .from('leads')
+    .select('id')
+    .eq('agency_id', agencyId)
+    .eq('total_call_attempts', 0)
+    .eq('current_status', '4.0 SOLD')
+    .not('first_sold_date', 'is', null);
+
+  if (autoLeadsErr) {
+    throw new Error('Failed to read auto-created sales leads: ' + autoLeadsErr.message);
+  }
+
+  const autoLeadIds = (autoLeads ?? []).map((l: { id: string }) => l.id);
+
+  // 2. Delete all sales_events for this agency.
+  const { data: deletedEvents, error: eventsDelErr } = await supabase
+    .from('sales_events')
+    .delete()
+    .eq('agency_id', agencyId)
+    .select('id');
+  if (eventsDelErr) {
+    throw new Error('Failed to delete sales_events: ' + eventsDelErr.message);
+  }
+
+  // 3. Delete the auto-created leads (now unlinked from any sales_events).
+  if (autoLeadIds.length > 0) {
+    const { error: leadsDelErr } = await supabase
+      .from('leads')
+      .delete()
+      .in('id', autoLeadIds);
+    if (leadsDelErr) {
+      throw new Error('Failed to delete auto-created leads: ' + leadsDelErr.message);
+    }
+  }
+
+  // 4. Reset denormalized sold fields on any remaining leads in this agency
+  //    that still have them set (matched leads with call history).
+  const { data: resetRows, error: resetErr } = await supabase
+    .from('leads')
+    .update({
+      total_items_sold: null,
+      total_policies_sold: null,
+      total_premium: null,
+      first_sold_date: null,
+    })
+    .eq('agency_id', agencyId)
+    .not('first_sold_date', 'is', null)
+    .select('id');
+  if (resetErr) {
+    throw new Error('Failed to reset sold fields: ' + resetErr.message);
+  }
+
+  return {
+    salesEventsDeleted: deletedEvents?.length ?? 0,
+    autoLeadsDeleted: autoLeadIds.length,
+    leadsReset: resetRows?.length ?? 0,
+  };
 }
 
 export async function deleteUpload(uploadId: string): Promise<void> {
