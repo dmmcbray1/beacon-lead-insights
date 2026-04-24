@@ -44,8 +44,26 @@ export function normalizePhone(raw: string | null | undefined): string | null {
   return null;
 }
 
-export function parseLeadDate(raw: string | null | undefined): string | null {
+export function parseLeadDate(raw: unknown): string | null {
   if (raw == null) return null;
+
+  // Date object — produced by XLSX when `cellDates: true` is passed to
+  // XLSX.read (or by manual conversion elsewhere).
+  if (raw instanceof Date) {
+    return isValidDate(raw) ? formatDate(raw, 'yyyy-MM-dd') : null;
+  }
+
+  // Excel serial number — produced by XLSX when `cellDates` is false/absent.
+  // Excel's epoch is 1899-12-30 (accounts for Lotus 1-2-3's leap-year bug).
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const ms = Date.UTC(1899, 11, 30) + raw * 86_400_000;
+    const d = new Date(ms);
+    if (!isValidDate(d)) return null;
+    const yr = d.getUTCFullYear();
+    if (yr < 1900 || yr > 2100) return null;
+    return formatDate(d, 'yyyy-MM-dd');
+  }
+
   const s = String(raw).trim();
   if (!s) return null;
 
@@ -90,7 +108,7 @@ export function parseRicochetRow(
     return { ok: false, error: { rowNumber, reason: 'invalid_phone' } };
   }
 
-  const leadDate = parseLeadDate(String(pick(row, 'Lead Date') ?? ''));
+  const leadDate = parseLeadDate(pick(row, 'Lead Date'));
   if (!leadDate) {
     return { ok: false, error: { rowNumber, reason: 'invalid_date' } };
   }

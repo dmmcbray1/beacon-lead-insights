@@ -45,7 +45,11 @@ export type RicochetDecision = 'requote' | 'overwrite';
  */
 export async function parseRicochetFile(file: File): Promise<ParsedRicochetFile> {
   const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: 'array' });
+  // cellDates: true makes XLSX return Date objects (not serial numbers) for
+  // date cells, so parseLeadDate can format them without guessing at
+  // Excel's epoch. parseLeadDate also still accepts numbers and strings as
+  // a defensive fallback.
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true });
   const sheetName = wb.SheetNames[0];
   const sheet = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });

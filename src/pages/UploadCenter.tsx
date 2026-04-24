@@ -31,6 +31,7 @@ import {
   type RequoteDecision,
 } from '@/lib/importService';
 import type { RicochetMatch } from '@/lib/importRicochet';
+import type { RicochetRowParseError } from '@/lib/ricochetParser';
 import BatchDropSlot, { type BatchDropSlotValue } from '@/components/upload/BatchDropSlot';
 import UploadHistoryRow, { type UploadRow } from '@/components/upload/UploadHistoryRow';
 import RequoteReviewDialog from '@/components/upload/RequoteReviewDialog';
@@ -104,6 +105,7 @@ export default function UploadCenter() {
   const [skippedModal, setSkippedModal] = useState<
     { title: string; uploadId: string } | null
   >(null);
+  const [ricochetErrorsModalOpen, setRicochetErrorsModalOpen] = useState(false);
 
   const invalidateCaches = async () => {
     await queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -457,6 +459,10 @@ export default function UploadCenter() {
                     {
                       icon: 'warn',
                       text: `${state.result.ricochet.errors.length} rows with parse errors`,
+                      onClick:
+                        state.result.ricochet.errors.length > 0
+                          ? () => setRicochetErrorsModalOpen(true)
+                          : undefined,
                     },
                   ]}
                 />
@@ -522,6 +528,13 @@ export default function UploadCenter() {
         title={skippedModal?.title ?? ''}
         uploadId={skippedModal?.uploadId ?? null}
         onClose={() => setSkippedModal(null)}
+      />
+
+      {/* ── Ricochet Parse Errors Modal ───────────────────────────────────── */}
+      <RicochetParseErrorsModal
+        open={ricochetErrorsModalOpen}
+        errors={state.result?.ricochet?.errors ?? []}
+        onClose={() => setRicochetErrorsModalOpen(false)}
       />
 
       {/* ── Duplicate-import confirmation ─────────────────────────────────── */}
@@ -772,6 +785,96 @@ function SkippedRowsModal({
             onClick={downloadCsv}
             disabled={!rows || rows.length === 0}
           >
+            <Download className="w-4 h-4 mr-2" />
+            Download CSV
+          </Button>
+          <Button onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── RicochetParseErrorsModal ─────────────────────────────────────────────────
+
+function RicochetParseErrorsModal({
+  open,
+  errors,
+  onClose,
+}: {
+  open: boolean;
+  errors: RicochetRowParseError[];
+  onClose: () => void;
+}) {
+  const counts = errors.reduce<Record<string, number>>((acc, e) => {
+    acc[e.reason] = (acc[e.reason] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const downloadCsv = () => {
+    if (errors.length === 0) return;
+    const escape = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = ['row_number,reason,detail'];
+    for (const e of errors) {
+      lines.push([e.rowNumber, e.reason, e.detail ?? ''].map(escape).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ricochet_parse_errors.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Ricochet — Parse Errors</DialogTitle>
+        </DialogHeader>
+
+        {errors.length > 0 && (
+          <div className="text-xs text-muted-foreground mb-2">
+            Reasons:{' '}
+            {Object.entries(counts)
+              .map(([reason, n]) => `${reason} (${n})`)
+              .join(', ')}
+          </div>
+        )}
+
+        {errors.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No parse errors.</p>
+        ) : (
+          <div className="border rounded-md overflow-auto max-h-[50vh]">
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Row</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Reason</th>
+                  <th className="px-3 py-2 text-left font-medium text-muted-foreground">Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {errors.map((e, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-3 py-1.5 tabular-nums">{e.rowNumber}</td>
+                    <td className="px-3 py-1.5 font-mono text-[11px]">{e.reason}</td>
+                    <td className="px-3 py-1.5">{e.detail ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={downloadCsv} disabled={errors.length === 0}>
             <Download className="w-4 h-4 mr-2" />
             Download CSV
           </Button>
