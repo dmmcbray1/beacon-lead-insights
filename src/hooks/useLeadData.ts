@@ -966,15 +966,15 @@ export function useROIData(filters: Filters) {
       const { from, to } = getDateBounds(filters);
 
       // ── Leads data ───────────────────────────────────────────────────────
-      const dateField = getDateField(filters.dateBasis);
+      // ROI always scopes by first_seen_date (when the lead entered the system)
       let leadsQ = supabase
         .from('leads')
-        .select('id, lead_cost, campaign, lead_date, first_seen_date, first_contact_date, first_quote_date, first_sold_date, total_items_sold, total_policies_sold')
+        .select('id, lead_cost, campaign, first_seen_date, first_contact_date, first_quote_date, first_sold_date')
         .limit(50000);
 
       if (effectiveAgencyId) leadsQ = leadsQ.eq('agency_id', effectiveAgencyId);
-      if (from) leadsQ = leadsQ.gte(dateField, from);
-      if (to) leadsQ = leadsQ.lte(dateField, dateField === 'lead_date' ? to : to + 'T23:59:59');
+      if (from) leadsQ = leadsQ.gte('first_seen_date', from);
+      if (to) leadsQ = leadsQ.lte('first_seen_date', to + 'T23:59:59');
 
       const { data: leadsData, error: leadsErr } = await leadsQ;
       if (leadsErr) throw leadsErr;

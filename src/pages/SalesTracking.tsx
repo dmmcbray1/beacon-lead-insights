@@ -81,7 +81,7 @@ export default function SalesTracking() {
       </div>
       {error && (
         <div className="mb-4 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
-          {error instanceof Error ? error.message : String(error)}
+          {error instanceof Error ? error.message : (error as {message?: string})?.message ?? JSON.stringify(error)}
         </div>
       )}
 
