@@ -280,7 +280,7 @@ export default function UploadCenter() {
 
   const currentFileLabel =
     state.progress?.currentFile === 'ricochet'
-      ? 'Ricochet Lead List'
+      ? 'Beacon Lead List'
       : state.progress?.currentFile === 'daily_call'
       ? 'Daily Call'
       : 'Deer Dama';
@@ -292,7 +292,7 @@ export default function UploadCenter() {
           Upload Center
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Import Ricochet Lead List, Daily Call Report, and Deer Dama (Lead) Report
+          Import Beacon Lead List, Daily Call Report, and Deer Dama (Lead) Report
         </p>
       </div>
 
@@ -325,12 +325,12 @@ export default function UploadCenter() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <section>
               <h3 className="text-sm font-semibold mb-2">
-                1. Ricochet Lead List{' '}
+                1. Beacon Lead List{' '}
                 <span className="text-muted-foreground font-normal">(required first)</span>
               </h3>
               <BatchDropSlot
                 expectedType={REPORT_TYPES.RICOCHET_LEAD_LIST}
-                label="Ricochet Lead List"
+                label="Beacon Lead List"
                 value={state.ricochet}
                 onChange={(v) => setState((prev) => ({ ...prev, ricochet: v }))}
               />
@@ -344,7 +344,7 @@ export default function UploadCenter() {
                 value={state.dailyCall}
                 onChange={(v) => setState((prev) => ({ ...prev, dailyCall: v }))}
                 disabled={!state.ricochet}
-                disabledHelperText="Upload the Ricochet Lead List first."
+                disabledHelperText="Upload the Beacon Lead List first."
               />
             </section>
 
@@ -356,7 +356,7 @@ export default function UploadCenter() {
                 value={state.deerDama}
                 onChange={(v) => setState((prev) => ({ ...prev, deerDama: v }))}
                 disabled={!state.ricochet}
-                disabledHelperText="Upload the Ricochet Lead List first."
+                disabledHelperText="Upload the Beacon Lead List first."
               />
             </section>
 
@@ -453,7 +453,7 @@ export default function UploadCenter() {
             if (!slot) return null;
             const label =
               key === 'ricochet'
-                ? 'Ricochet Lead List'
+                ? 'Beacon Lead List'
                 : key === 'dailyCall'
                 ? 'Daily Call Report'
                 : 'Deer Dama (Lead) Report';
@@ -564,7 +564,7 @@ export default function UploadCenter() {
             <div className="space-y-4 mb-6">
               {state.result.ricochet && (
                 <SummaryBlock
-                  title="Ricochet Lead List"
+                  title="Beacon Lead List"
                   rows={[
                     { icon: 'success', text: `${state.result.ricochet.rowsImported} new leads created` },
                     { icon: 'success', text: `${state.result.ricochet.rowsUpdated} leads updated (overwritten)` },
@@ -661,7 +661,7 @@ export default function UploadCenter() {
               <div className="space-y-2">
                 {duplicatePrompt?.ricochet && (
                   <p>
-                    The Ricochet Lead List file matches a previous import:{' '}
+                    The Beacon Lead List file matches a previous import:{' '}
                     <strong>{duplicatePrompt.ricochet.fileName}</strong> ({duplicatePrompt.ricochet.uploadDate}).
                   </p>
                 )}
@@ -1021,7 +1021,7 @@ function RicochetParseErrorsModal({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Ricochet — Parse Errors</DialogTitle>
+          <DialogTitle>Beacon Lead List — Parse Errors</DialogTitle>
         </DialogHeader>
 
         {errors.length > 0 && (

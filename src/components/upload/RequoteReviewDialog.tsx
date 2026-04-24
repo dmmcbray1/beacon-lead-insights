@@ -154,7 +154,7 @@ function MatchCard({
               : ''
           }
         >
-          <div className="text-muted-foreground font-semibold mb-1">Incoming (Ricochet)</div>
+          <div className="text-muted-foreground font-semibold mb-1">Incoming (Beacon)</div>
           <div>
             {[incoming.firstName, incoming.lastName].filter(Boolean).join(' ') || '—'}
           </div>
