@@ -5,6 +5,7 @@ import {
   parseNumeric,
   parseRicochetRow,
   dedupeRicochetRowsByPhone,
+  isParseErr,
 } from './ricochetParser';
 
 describe('normalizePhone', () => {
@@ -97,13 +98,13 @@ describe('parseRicochetRow', () => {
   it('returns an error for invalid phone', () => {
     const parsed = parseRicochetRow({ ...row, Phone: '' }, 1);
     expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.error.reason).toBe('invalid_phone');
+    if (isParseErr(parsed)) expect(parsed.error.reason).toBe('invalid_phone');
   });
 
   it('returns an error for invalid date', () => {
     const parsed = parseRicochetRow({ ...row, 'Lead Date': 'blah' }, 1);
     expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.error.reason).toBe('invalid_date');
+    if (isParseErr(parsed)) expect(parsed.error.reason).toBe('invalid_date');
   });
 
   it('accepts blank numeric fields (stored as null)', () => {

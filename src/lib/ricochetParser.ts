@@ -29,9 +29,13 @@ export type RicochetRowParseError = {
   detail?: string;
 };
 
-export type ParseResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: RicochetRowParseError };
+export type ParseOk<T> = { ok: true; value: T };
+export type ParseErr = { ok: false; error: RicochetRowParseError };
+export type ParseResult<T> = ParseOk<T> | ParseErr;
+
+export function isParseErr<T>(r: ParseResult<T>): r is ParseErr {
+  return !r.ok;
+}
 
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (raw == null) return null;

@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { RicochetRow, RicochetRowParseError } from './ricochetParser';
-import { parseRicochetRow, dedupeRicochetRowsByPhone } from './ricochetParser';
+import { parseRicochetRow, dedupeRicochetRowsByPhone, isParseErr } from './ricochetParser';
+import type { Json } from '@/integrations/supabase/types';
 import * as XLSX from 'xlsx';
 
 export interface RicochetMatch {
@@ -49,8 +50,8 @@ export async function parseRicochetFile(file: File): Promise<ParsedRicochetFile>
   rows.forEach((row, i) => {
     const rowNumber = i + 2; // header row = 1
     const result = parseRicochetRow(row, rowNumber);
-    if (result.ok) parsedRows.push(result.value);
-    else errors.push(result.error);
+    if (isParseErr(result)) errors.push(result.error);
+    else parsedRows.push(result.value);
   });
 
   const { kept, dropped } = dedupeRicochetRowsByPhone(parsedRows);
@@ -165,7 +166,7 @@ export async function writeRicochetPhase(params: {
     dwelling_value: r.dwellingValue,
     home_value: r.homeValue,
     lead_cost: r.leadCost,
-    payload: r.payload,
+    payload: r.payload as Json,
   }));
 
   const { data: rawRowsInserted, error: rawErr } = await supabase
