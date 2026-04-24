@@ -278,14 +278,26 @@ export async function importSalesLog(
     // ── 7a. Create new lead if not found ─────────────────────────────────────
     if (!leadId) {
       try {
+        // Split "First Last" name into parts
+        const nameParts = (firstRow.customerName ?? '').trim().split(/\s+/);
+        const firstName = nameParts[0] ?? null;
+        const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+
         const { data: newLead, error: newLeadErr } = await supabase
           .from('leads')
           .insert({
             agency_id: agencyId,
             normalized_phone: phone ?? firstRow.customerPhone,
             current_lead_type: 're_quote',
-            current_status: '9.1 REQUOTE',
+            current_status: '4.0 SOLD',
+            first_name: firstName,
+            last_name: lastName,
+            email: firstRow.customerEmail || null,
+            zip: firstRow.customerZip || null,
+            campaign: firstRow.leadSource || null,
+            lead_date: saleDate,
             first_seen_date: saleDate ?? uploadDate,
+            first_sold_date: saleDate,
             total_call_attempts: 0,
             total_callbacks: 0,
             total_voicemails: 0,
