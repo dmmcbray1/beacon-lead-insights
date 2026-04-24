@@ -1,4 +1,6 @@
 import { parse as parseDate, isValid as isValidDate, format as formatDate } from 'date-fns';
+import { normalizePhone } from './phone';
+export { normalizePhone } from './phone';
 
 export interface RicochetRow {
   rowNumber: number;
@@ -35,13 +37,6 @@ export type ParseResult<T> = ParseOk<T> | ParseErr;
 
 export function isParseErr<T>(r: ParseResult<T>): r is ParseErr {
   return !r.ok;
-}
-
-export function normalizePhone(raw: string | null | undefined): string | null {
-  if (raw == null) return null;
-  const digits = String(raw).replace(/\D/g, '');
-  if (digits.length === 10 || digits.length === 11) return digits;
-  return null;
 }
 
 export function parseLeadDate(raw: unknown): string | null {

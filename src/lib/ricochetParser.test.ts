@@ -16,11 +16,19 @@ describe('normalizePhone', () => {
   it('accepts 10-digit phones', () => {
     expect(normalizePhone('2052063492')).toBe('2052063492');
   });
-  it('accepts 11-digit phones starting with 1', () => {
-    expect(normalizePhone('12052063492')).toBe('12052063492');
+  it('strips the leading 1 on 11-digit country-coded phones', () => {
+    expect(normalizePhone('12052063492')).toBe('2052063492');
+    expect(normalizePhone('1-205-206-3492')).toBe('2052063492');
+    expect(normalizePhone('+1 (205) 206-3492')).toBe('2052063492');
   });
   it('returns null for too-short phones', () => {
     expect(normalizePhone('205206')).toBeNull();
+  });
+  it('returns null for 11-digit numbers not starting with 1', () => {
+    expect(normalizePhone('22052063492')).toBeNull();
+  });
+  it('returns null for 12+ digit numbers', () => {
+    expect(normalizePhone('120520634920')).toBeNull();
   });
   it('returns null for blank/undefined', () => {
     expect(normalizePhone('')).toBeNull();
