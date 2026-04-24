@@ -214,6 +214,11 @@ export async function writeRicochetPhase(params: {
         zip: r.zip,
         campaign: r.campaign,
         lead_date: r.leadDate,
+        // first_seen_date drives the dashboard's default date filter. Mirror
+        // lead_date here so Ricochet-originated leads are visible under
+        // "Last 30 days" / "Today" views. DC can still overwrite with an
+        // earlier call_date later via takeEarlier.
+        first_seen_date: r.leadDate,
         dwelling_value: r.dwellingValue,
         home_value: r.homeValue,
         lead_cost: r.leadCost,
