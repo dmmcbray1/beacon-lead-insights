@@ -960,9 +960,29 @@ export interface ROICampaignRow {
   roiPct: number;
 }
 
+export interface ROIProducerRow {
+  name: string;
+  staffId: string | null;
+  households: number;
+  items: number;
+  policies: number;
+  premium: number;
+  avgPremiumPerHousehold: number;
+}
+
+export interface ROIDateRow {
+  date: string; // YYYY-MM-DD
+  households: number;
+  items: number;
+  policies: number;
+  premium: number;
+}
+
 export interface ROIData {
   metrics: ROIMetrics;
   byCampaign: ROICampaignRow[];
+  byProducer: ROIProducerRow[];
+  byDate: ROIDateRow[];
 }
 
 export function useROIData(filters: Filters) {
@@ -993,7 +1013,7 @@ export function useROIData(filters: Filters) {
       // ── Sales events data ────────────────────────────────────────────────
       let salesQ = supabase
         .from('sales_events')
-        .select('sale_id, policy_type, items, premium')
+        .select('sale_id, policy_type, items, premium, producer, staff_id, sale_date')
         .limit(50000);
 
       if (effectiveAgencyId) salesQ = salesQ.eq('agency_id', effectiveAgencyId);
@@ -1088,7 +1108,82 @@ export function useROIData(filters: Filters) {
         };
       }).sort((a, b) => b.spend - a.spend);
 
-      return { metrics, byCampaign };
+      // ── By Producer ──────────────────────────────────────────────────────
+      let smQ = supabase.from('staff_members').select('id, name');
+      if (effectiveAgencyId) smQ = smQ.eq('agency_id', effectiveAgencyId);
+      const { data: staffList } = await smQ;
+      const staffNameMap = new Map<string, string>(
+        (staffList ?? []).map((s) => [s.id, s.name]),
+      );
+
+      type ProdAgg = {
+        staffId: string | null;
+        households: Set<string>;
+        items: number;
+        policies: number;
+        premium: number;
+      };
+      const byProducerMap = new Map<string, ProdAgg>();
+      for (const ev of salesEvents) {
+        const key = ev.producer ?? '(Unknown)';
+        if (!byProducerMap.has(key)) {
+          byProducerMap.set(key, {
+            staffId: ev.staff_id,
+            households: new Set(),
+            items: 0,
+            policies: 0,
+            premium: 0,
+          });
+        }
+        const agg = byProducerMap.get(key)!;
+        agg.households.add(ev.sale_id);
+        agg.items += ev.items ?? 1;
+        agg.policies += 1;
+        agg.premium += Number(ev.premium) || 0;
+      }
+      const byProducer: ROIProducerRow[] = [...byProducerMap.entries()]
+        .map(([name, agg]) => ({
+          name: agg.staffId ? (staffNameMap.get(agg.staffId) ?? name) : name,
+          staffId: agg.staffId,
+          households: agg.households.size,
+          items: agg.items,
+          policies: agg.policies,
+          premium: agg.premium,
+          avgPremiumPerHousehold:
+            agg.households.size > 0 ? agg.premium / agg.households.size : 0,
+        }))
+        .sort((a, b) => b.premium - a.premium);
+
+      // ── By Date (sale_date) ──────────────────────────────────────────────
+      type DateAgg = {
+        households: Set<string>;
+        items: number;
+        policies: number;
+        premium: number;
+      };
+      const byDateMap = new Map<string, DateAgg>();
+      for (const ev of salesEvents) {
+        const key = ev.sale_date ?? '(Unknown)';
+        if (!byDateMap.has(key)) {
+          byDateMap.set(key, { households: new Set(), items: 0, policies: 0, premium: 0 });
+        }
+        const agg = byDateMap.get(key)!;
+        agg.households.add(ev.sale_id);
+        agg.items += ev.items ?? 1;
+        agg.policies += 1;
+        agg.premium += Number(ev.premium) || 0;
+      }
+      const byDate: ROIDateRow[] = [...byDateMap.entries()]
+        .map(([date, agg]) => ({
+          date,
+          households: agg.households.size,
+          items: agg.items,
+          policies: agg.policies,
+          premium: agg.premium,
+        }))
+        .sort((a, b) => b.date.localeCompare(a.date));
+
+      return { metrics, byCampaign, byProducer, byDate };
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,
