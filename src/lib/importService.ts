@@ -1821,36 +1821,60 @@ async function safeRollback(batchId: string): Promise<Error | null> {
 async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
   if (uploadIds.length === 0) return;
 
-  // 1. Find leads auto-created by this upload (total_call_attempts = 0,
-  //    meaning they were created by the Sales Log and never called)
-  const { data: events } = await supabase
+  // 1. Find leads linked to sales_events for these uploads
+  const { data: events, error: eventsErr } = await supabase
     .from('sales_events')
     .select('lead_id')
     .in('upload_id', uploadIds);
 
+  if (eventsErr) {
+    throw new Error('Failed to read sales_events for cleanup: ' + eventsErr.message);
+  }
+
   const autoLeadIds = [...new Set(
     (events ?? [])
       .map((e: { lead_id: string | null }) => e.lead_id)
-      .filter(Boolean) as string[]
+      .filter((id): id is string => Boolean(id))
   )];
 
-  // 2. Of those leads, only delete ones with no call history
-  //    (total_call_attempts = 0 — they were created purely by Sales Log)
+  // 2. Delete sales_events first so the FK from sales_events.lead_id ->
+  //    leads.id doesn't hold references when we delete the auto-created
+  //    leads below. (FK is ON DELETE SET NULL, so either order works, but
+  //    doing events first keeps the lead delete clean and avoids
+  //    transiently orphaned rows.)
+  const { error: eventsDelErr } = await supabase
+    .from('sales_events')
+    .delete()
+    .in('upload_id', uploadIds);
+  if (eventsDelErr) {
+    throw new Error('Failed to delete sales_events: ' + eventsDelErr.message);
+  }
+
+  // 3. Of the linked leads, only delete ones with no call history —
+  //    total_call_attempts = 0 means they were auto-created purely by
+  //    the Sales Log importer and never touched by Daily Call / Deer Dama.
   if (autoLeadIds.length > 0) {
-    const { data: autoLeads } = await supabase
+    const { data: autoLeads, error: autoLeadsErr } = await supabase
       .from('leads')
       .select('id')
       .in('id', autoLeadIds)
       .eq('total_call_attempts', 0);
 
+    if (autoLeadsErr) {
+      throw new Error('Failed to read auto-created leads: ' + autoLeadsErr.message);
+    }
+
     const idsToDelete = (autoLeads ?? []).map((l: { id: string }) => l.id);
     if (idsToDelete.length > 0) {
-      await supabase.from('leads').delete().in('id', idsToDelete);
+      const { error: leadsDelErr } = await supabase
+        .from('leads')
+        .delete()
+        .in('id', idsToDelete);
+      if (leadsDelErr) {
+        throw new Error('Failed to delete auto-created leads: ' + leadsDelErr.message);
+      }
     }
   }
-
-  // 3. Delete the sales_events rows
-  await supabase.from('sales_events').delete().in('upload_id', uploadIds);
 }
 
 export async function deleteUpload(uploadId: string): Promise<void> {

@@ -51,6 +51,22 @@ interface SalesRow {
   lineItems: string;
 }
 
+// ─── Helper: build dedup key for sales_events rows ────────────────────────────
+// Shared key format for both existing-row fingerprints loaded from the DB and
+// incoming rows from the file. Premium is quantised to cents so 100 and 100.00
+// compare equal.
+function makeDedupKey(
+  normalizedPhone: string | null,
+  saleDate: string | null,
+  items: number,
+  premium: number,
+): string {
+  const phoneKey = normalizedPhone ?? '';
+  const dateKey = saleDate ?? '';
+  const premiumCents = Math.round((Number.isFinite(premium) ? premium : 0) * 100);
+  return `${phoneKey}|${dateKey}|${items}|${premiumCents}`;
+}
+
 // ─── Helper: parse date value from XLSX ──────────────────────────────────────
 
 function parseDateValue(val: unknown): string | null {
@@ -260,6 +276,31 @@ export async function importSalesLog(
     }
   }
 
+  // ── 6b. Dedup: load existing sales_events for this agency so we can skip
+  //        rows that were already imported from a previous upload of the
+  //        same file. Dedup key: (normalized_phone, sale_date, items, premium).
+  //        sales_events has no unique constraint covering this tuple, so we
+  //        compare in memory against the existing set.
+  onProgress?.({ phase: 'checking for duplicates', processed: 0, total: householdMap.size });
+
+  const existingEventKeys = new Set<string>();
+  const { data: existingEvents, error: existingEventsErr } = await supabase
+    .from('sales_events')
+    .select('normalized_phone, sale_date, items, premium')
+    .eq('agency_id', agencyId);
+
+  if (existingEventsErr) {
+    errors.push('Existing sales_events lookup error: ' + existingEventsErr.message);
+  }
+  for (const ev of existingEvents ?? []) {
+    existingEventKeys.add(makeDedupKey(
+      ev.normalized_phone ?? null,
+      ev.sale_date ?? null,
+      Number(ev.items ?? 0),
+      Number(ev.premium ?? 0),
+    ));
+  }
+
   // ── 7. Process each household ─────────────────────────────────────────────
   let imported = 0;
   let newLeadsCreated = 0;
@@ -272,6 +313,17 @@ export async function importSalesLog(
     const firstRow = policyRows[0];
     const phone = firstRow.normalizedPhone;
     const saleDate = firstRow.saleDate;
+
+    // Skip policy rows that already exist in sales_events. Track per-row so
+    // lead totals below only accumulate for net-new rows.
+    const netNewRows = policyRows.filter((r) => {
+      const key = makeDedupKey(r.normalizedPhone, r.saleDate, r.items, r.premium);
+      if (existingEventKeys.has(key)) return false;
+      existingEventKeys.add(key);
+      return true;
+    });
+
+    if (netNewRows.length === 0) continue;
 
     let leadId: string | null = phone ? (leadsByPhone.get(phone) ?? null) : null;
 
@@ -319,13 +371,13 @@ export async function importSalesLog(
       }
     }
 
-    // ── 7b. Compute aggregates for this household ─────────────────────────────
-    const totalItems = policyRows.reduce((sum, r) => sum + r.items, 0);
-    const totalPolicies = policyRows.length;
-    const totalPremium = policyRows.reduce((sum, r) => sum + r.premium, 0);
+    // ── 7b. Compute aggregates for this household (net-new rows only) ─────────
+    const totalItems = netNewRows.reduce((sum, r) => sum + r.items, 0);
+    const totalPolicies = netNewRows.length;
+    const totalPremium = netNewRows.reduce((sum, r) => sum + r.premium, 0);
 
     // ── 7c. Insert sales_events rows ─────────────────────────────────────────
-    const eventsToInsert = policyRows.map((row) => ({
+    const eventsToInsert = netNewRows.map((row) => ({
       agency_id: agencyId,
       lead_id: leadId,
       upload_id: uploadId,
@@ -357,7 +409,7 @@ export async function importSalesLog(
       continue;
     }
 
-    imported += policyRows.length;
+    imported += netNewRows.length;
 
     // ── 7d. Update lead sold fields ───────────────────────────────────────────
     if (leadId) {
