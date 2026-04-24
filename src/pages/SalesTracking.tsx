@@ -15,7 +15,7 @@ import type { Filters } from '@/hooks/useLeadData';
 import { DollarSign, ShoppingBag, Users, FileText, TrendingUp } from 'lucide-react';
 
 const defaultFilters: Filters = {
-  dateRange: '30d',
+  dateRange: 'all',
   agency: 'all',
   staff: 'all',
   leadType: 'all',
@@ -63,7 +63,7 @@ function KPICard({ label, value, icon, loading }: KPICardProps) {
 
 export default function SalesTracking() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
-  const { data, isLoading } = useSalesData(filters);
+  const { data, isLoading, error } = useSalesData(filters);
 
   const kpis = data?.kpis;
   const byProducer = data?.byProducer ?? [];
@@ -79,6 +79,11 @@ export default function SalesTracking() {
           Household-level sales performance from Sales Log imports
         </p>
       </div>
+      {error && (
+        <div className="mb-4 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+          {error instanceof Error ? error.message : String(error)}
+        </div>
+      )}
 
       <div className="mb-6">
         <FilterBar filters={filters} onChange={setFilters} />

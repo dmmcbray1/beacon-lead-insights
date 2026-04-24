@@ -15,7 +15,7 @@ import type { Filters } from '@/hooks/useLeadData';
 import { DollarSign, TrendingUp, Users, PhoneCall, ShoppingBag, BarChart3, Percent } from 'lucide-react';
 
 const defaultFilters: Filters = {
-  dateRange: '30d',
+  dateRange: 'all',
   agency: 'all',
   staff: 'all',
   leadType: 'all',
@@ -83,7 +83,7 @@ function MetricCard({ label, value, subLabel, icon, highlight, loading }: Metric
 
 export default function ROITracking() {
   const [filters, setFilters] = useState<Filters>(defaultFilters);
-  const { data, isLoading } = useROIData(filters);
+  const { data, isLoading, error } = useROIData(filters);
 
   const m = data?.metrics;
   const byCampaign = data?.byCampaign ?? [];
@@ -98,6 +98,12 @@ export default function ROITracking() {
           Lead spend vs. premium revenue — return on investment analysis
         </p>
       </div>
+
+      {error && (
+        <div className="mb-4 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+          {error instanceof Error ? error.message : String(error)}
+        </div>
+      )}
 
       <div className="mb-6">
         <FilterBar filters={filters} onChange={setFilters} />
