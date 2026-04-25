@@ -1052,7 +1052,7 @@ export function useROIData(filters: Filters) {
       // ROI always scopes by first_seen_date (when the lead entered the system)
       let leadsQ = supabase
         .from('leads')
-        .select('id, lead_cost, campaign, first_seen_date, first_contact_date, first_quote_date, first_sold_date')
+        .select('id, lead_cost, campaign, current_status, first_seen_date, first_contact_date, first_quote_date, first_sold_date')
         .limit(50000);
 
       if (effectiveAgencyId) leadsQ = leadsQ.eq('agency_id', effectiveAgencyId);
@@ -1080,12 +1080,27 @@ export function useROIData(filters: Filters) {
       const salesEvents = salesData ?? [];
 
       // ── Aggregate metrics ────────────────────────────────────────────────
+      // Match the dashboard KPI definition: a lead counts as contacted/quoted
+      // if either the first_*_date is set OR current_status falls in the
+      // matching disposition list. (Sales-log imports only set first_sold_date,
+      // and Daily Call imports may leave first_quote_date null while current
+      // status reflects '3.0 QUOTED'.)
+      const QUOTE_STATUS_SET = new Set(QUOTE_DISPOSITIONS.map((d) => d.toLowerCase()));
+      const CONTACT_STATUS_SET = new Set(CONTACT_DISPOSITIONS.map((d) => d.toLowerCase()));
+      const isLeadQuoted = (l: { current_status: string | null; first_quote_date: string | null; first_sold_date: string | null }) =>
+        l.first_quote_date != null ||
+        l.first_sold_date != null ||
+        (l.current_status != null && QUOTE_STATUS_SET.has(l.current_status.toLowerCase()));
+      const isLeadContacted = (l: { current_status: string | null; first_contact_date: string | null; first_quote_date: string | null; first_sold_date: string | null }) =>
+        l.first_contact_date != null ||
+        l.first_quote_date != null ||
+        l.first_sold_date != null ||
+        (l.current_status != null && CONTACT_STATUS_SET.has(l.current_status.toLowerCase()));
+
       const totalLeadSpend = leads.reduce((s, l) => s + (Number(l.lead_cost) || 0), 0);
       const totalLeads = leads.length;
-      const totalContactedLeads = leads.filter((l) => l.first_contact_date != null).length;
-      const quotedLeads = leads.filter((l) => l.first_quote_date != null);
-      const totalQuotedHouseholds = quotedLeads.length;
-      const quotedLeadSpend = quotedLeads.reduce((s, l) => s + (Number(l.lead_cost) || 0), 0);
+      const totalContactedLeads = leads.filter(isLeadContacted).length;
+      const totalQuotedHouseholds = leads.filter(isLeadQuoted).length;
 
       // Sales households
       const householdMap = new Map<string, typeof salesEvents>();
@@ -1115,7 +1130,7 @@ export function useROIData(filters: Filters) {
         totalQuotedHouseholds,
         totalContactedLeads,
         costPerLead: totalLeads > 0 ? totalLeadSpend / totalLeads : 0,
-        costPerQuotedHousehold: totalQuotedHouseholds > 0 ? quotedLeadSpend / totalQuotedHouseholds : 0,
+        costPerQuotedHousehold: totalQuotedHouseholds > 0 ? totalLeadSpend / totalQuotedHouseholds : 0,
         costPerSoldHousehold: totalHouseholdsSold > 0 ? totalLeadSpend / totalHouseholdsSold : 0,
         costPerConversation: totalContactedLeads > 0 ? totalLeadSpend / totalContactedLeads : 0,
         avgItemsPerSoldHousehold: totalHouseholdsSold > 0 ? totalItemsSold / totalHouseholdsSold : 0,
@@ -1142,8 +1157,8 @@ export function useROIData(filters: Filters) {
         const agg = byCampaignMap.get(key)!;
         agg.leads++;
         agg.spend += Number(lead.lead_cost) || 0;
-        if (lead.first_contact_date) agg.contacted++;
-        if (lead.first_quote_date) agg.quoted++;
+        if (isLeadContacted(lead)) agg.contacted++;
+        if (isLeadQuoted(lead)) agg.quoted++;
         if (lead.first_sold_date) agg.sold++;
       }
 
