@@ -1083,7 +1083,9 @@ export function useROIData(filters: Filters) {
       const totalLeadSpend = leads.reduce((s, l) => s + (Number(l.lead_cost) || 0), 0);
       const totalLeads = leads.length;
       const totalContactedLeads = leads.filter((l) => l.first_contact_date != null).length;
-      const totalQuotedHouseholds = leads.filter((l) => l.first_quote_date != null).length;
+      const quotedLeads = leads.filter((l) => l.first_quote_date != null);
+      const totalQuotedHouseholds = quotedLeads.length;
+      const quotedLeadSpend = quotedLeads.reduce((s, l) => s + (Number(l.lead_cost) || 0), 0);
 
       // Sales households
       const householdMap = new Map<string, typeof salesEvents>();
@@ -1113,7 +1115,7 @@ export function useROIData(filters: Filters) {
         totalQuotedHouseholds,
         totalContactedLeads,
         costPerLead: totalLeads > 0 ? totalLeadSpend / totalLeads : 0,
-        costPerQuotedHousehold: totalQuotedHouseholds > 0 ? totalLeadSpend / totalQuotedHouseholds : 0,
+        costPerQuotedHousehold: totalQuotedHouseholds > 0 ? quotedLeadSpend / totalQuotedHouseholds : 0,
         costPerSoldHousehold: totalHouseholdsSold > 0 ? totalLeadSpend / totalHouseholdsSold : 0,
         costPerConversation: totalContactedLeads > 0 ? totalLeadSpend / totalContactedLeads : 0,
         avgItemsPerSoldHousehold: totalHouseholdsSold > 0 ? totalItemsSold / totalHouseholdsSold : 0,
