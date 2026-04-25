@@ -1973,6 +1973,66 @@ async function deleteSalesLogData(uploadIds: string[]): Promise<void> {
  * lead that has them set. Used to clean up orphaned sales_events rows whose
  * upload record no longer exists.
  */
+/**
+ * Wipe every upload, lead, and event for the agency. Preserves agencies,
+ * staff_members, user_profiles, user_roles, and any global mapping tables
+ * (upload_templates, disposition_mappings, call_type_mappings).
+ *
+ * Order:
+ *   1. sales_events (FK to leads is SET NULL but cleanest to remove first)
+ *   2. uploads — CASCADE clears call_events, status_events, quote_events,
+ *      callback_events, lead_identity_links, lead_staff_history, raw_*_rows,
+ *      lead_requote_events, import_errors
+ *   3. leads (now safe; dependent rows are gone)
+ */
+export async function resetAgencyData(agencyId: string): Promise<{
+  salesEventsDeleted: number;
+  uploadsDeleted: number;
+  leadsDeleted: number;
+}> {
+  // 1. Sales events
+  const { count: salesCount, error: salesCountErr } = await supabase
+    .from('sales_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('agency_id', agencyId);
+  if (salesCountErr) throw new Error('Failed to count sales_events: ' + salesCountErr.message);
+  const { error: salesDelErr } = await supabase
+    .from('sales_events')
+    .delete()
+    .eq('agency_id', agencyId);
+  if (salesDelErr) throw new Error('Failed to delete sales_events: ' + salesDelErr.message);
+
+  // 2. Uploads (cascades to events, identity links, staff history, raw_*_rows)
+  const { count: uploadCount, error: uploadCountErr } = await supabase
+    .from('uploads')
+    .select('id', { count: 'exact', head: true })
+    .eq('agency_id', agencyId);
+  if (uploadCountErr) throw new Error('Failed to count uploads: ' + uploadCountErr.message);
+  const { error: uploadDelErr } = await supabase
+    .from('uploads')
+    .delete()
+    .eq('agency_id', agencyId);
+  if (uploadDelErr) throw new Error('Failed to delete uploads: ' + uploadDelErr.message);
+
+  // 3. Leads (after dependents are gone)
+  const { count: leadCount, error: leadCountErr } = await supabase
+    .from('leads')
+    .select('id', { count: 'exact', head: true })
+    .eq('agency_id', agencyId);
+  if (leadCountErr) throw new Error('Failed to count leads: ' + leadCountErr.message);
+  const { error: leadDelErr } = await supabase
+    .from('leads')
+    .delete()
+    .eq('agency_id', agencyId);
+  if (leadDelErr) throw new Error('Failed to delete leads: ' + leadDelErr.message);
+
+  return {
+    salesEventsDeleted: salesCount ?? 0,
+    uploadsDeleted: uploadCount ?? 0,
+    leadsDeleted: leadCount ?? 0,
+  };
+}
+
 export async function clearAllSalesData(agencyId: string): Promise<{
   salesEventsDeleted: number;
   autoLeadsDeleted: number;

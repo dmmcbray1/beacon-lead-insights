@@ -26,6 +26,7 @@ import {
   resumeBatch,
   clearAllSalesData,
   clearStuckUploads,
+  resetAgencyData,
   BatchRollbackError,
   type BatchProgress,
   type BatchResult,
@@ -155,6 +156,32 @@ export default function UploadCenter() {
     } finally {
       setClearStuckRunning(false);
       setClearStuckOpen(false);
+    }
+  };
+
+  const [resetAgencyOpen, setResetAgencyOpen] = useState(false);
+  const [resetAgencyRunning, setResetAgencyRunning] = useState(false);
+  const [resetAgencyResult, setResetAgencyResult] = useState<{
+    salesEventsDeleted: number;
+    uploadsDeleted: number;
+    leadsDeleted: number;
+  } | null>(null);
+  const [resetAgencyError, setResetAgencyError] = useState<string | null>(null);
+
+  const handleResetAgencyData = async () => {
+    if (!agencyId) return;
+    setResetAgencyRunning(true);
+    setResetAgencyError(null);
+    setResetAgencyResult(null);
+    try {
+      const res = await resetAgencyData(agencyId);
+      setResetAgencyResult(res);
+      await queryClient.invalidateQueries();
+    } catch (err) {
+      setResetAgencyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResetAgencyRunning(false);
+      setResetAgencyOpen(false);
     }
   };
 
@@ -716,6 +743,45 @@ export default function UploadCenter() {
       {state.step === 'select' && (
         <div className="mt-8 max-w-3xl">
           <h3 className="section-title mb-4">Danger Zone</h3>
+          <div className="border border-destructive/50 rounded-lg bg-card p-5 mb-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground mb-1">
+                  Reset Agency Data
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Wipes every upload, lead, and event for this agency so you
+                  can start over with fresh imports. Preserves agencies, staff
+                  members, user accounts, and column mappings.
+                </p>
+                {resetAgencyResult && (
+                  <div className="mt-3 rounded-md border border-success/50 bg-success/10 px-3 py-2 text-xs text-foreground">
+                    Deleted {resetAgencyResult.uploadsDeleted} uploads,
+                    {' '}{resetAgencyResult.leadsDeleted} leads, and
+                    {' '}{resetAgencyResult.salesEventsDeleted} sales events.
+                  </div>
+                )}
+                {resetAgencyError && (
+                  <div className="mt-3 flex items-center gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {resetAgencyError}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="destructive"
+                onClick={() => setResetAgencyOpen(true)}
+                disabled={!agencyId || resetAgencyRunning}
+                className="shrink-0"
+              >
+                {resetAgencyRunning ? (
+                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Resetting…</>
+                ) : (
+                  <><Trash2 className="w-4 h-4 mr-2" />Reset Agency Data</>
+                )}
+              </Button>
+            </div>
+          </div>
           <div className="border border-destructive/50 rounded-lg bg-card p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -759,6 +825,29 @@ export default function UploadCenter() {
           </div>
         </div>
       )}
+
+      <AlertDialog open={resetAgencyOpen} onOpenChange={setResetAgencyOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset all agency data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Permanently deletes every upload, lead, and event for this
+              agency — including call_events, sales_events, lead_identity_links,
+              raw upload rows, and import error history. Agencies, staff,
+              users, and column mappings are kept. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleResetAgencyData}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Yes, reset agency data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={clearSalesOpen} onOpenChange={setClearSalesOpen}>
         <AlertDialogContent>
