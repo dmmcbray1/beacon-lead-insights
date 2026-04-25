@@ -303,22 +303,46 @@ const CONTACT_TIMING_BUCKET_LABELS = [
   'Day 8–14','Day 15–21','Day 22–30','No Match',
 ];
 
-function parseCallTypeBucket(callType: string | null | undefined): string {
-  if (!callType) return 'No Match';
-  const ct = callType.toLowerCase();
-  for (const b of CALL_TYPE_BUCKETS) {
-    if (ct.includes(b.suffix)) return b.label;
+function dayDiffToBucket(days: number): string {
+  if (days < 0) return 'No Match';
+  if (days === 0) return 'Day 1';
+  if (days === 1) return 'Day 2';
+  if (days === 2) return 'Day 3';
+  if (days === 3) return 'Day 4';
+  if (days === 4) return 'Day 5';
+  if (days === 5) return 'Day 6';
+  if (days === 6) return 'Day 7';
+  if (days <= 13) return 'Day 8–14';
+  if (days <= 20) return 'Day 15–21';
+  if (days <= 29) return 'Day 22–30';
+  return 'No Match';
+}
+
+function parseCallTypeBucket(callType: string | null | undefined, dayDiff?: number | null): string {
+  if (callType) {
+    const ct = callType.toLowerCase();
+    for (const b of CALL_TYPE_BUCKETS) {
+      if (ct.includes(b.suffix)) return b.label;
+    }
+  }
+  if (dayDiff != null && Number.isFinite(dayDiff)) {
+    return dayDiffToBucket(dayDiff);
   }
   return 'No Match';
 }
 
-function calcContactTimingFromCallTypes(callTypes: (string | null | undefined)[]): ContactTimingRow[] {
+interface FirstContactEntry {
+  callType: string | null | undefined;
+  dayDiff: number | null;
+}
+
+function calcContactTiming(entries: FirstContactEntry[]): ContactTimingRow[] {
   const counts = new Map<string, number>(CONTACT_TIMING_BUCKET_LABELS.map(l => [l, 0]));
-  for (const ct of callTypes) {
-    const bucket = parseCallTypeBucket(ct);
+  for (const e of entries) {
+    const bucket = parseCallTypeBucket(e.callType, e.dayDiff);
     counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
   }
-  const total = callTypes.length;
+  const total = entries.length;
   return CONTACT_TIMING_BUCKET_LABELS.map(l => ({
     label: l,
     count: counts.get(l) ?? 0,
@@ -351,14 +375,43 @@ export function useContactTiming(filters: Filters) {
 
       // First contact (earliest call_date) per lead. Results are ordered asc, so
       // the first row seen per lead_id is the earliest.
-      const firstContactByLead = new Map<string, string>();
+      const firstContactByLead = new Map<string, { callType: string | null; callDate: string | null }>();
       for (const ev of data ?? []) {
         if (!firstContactByLead.has(ev.lead_id)) {
-          firstContactByLead.set(ev.lead_id, ev.call_type ?? '');
+          firstContactByLead.set(ev.lead_id, { callType: ev.call_type ?? null, callDate: ev.call_date ?? null });
         }
       }
 
-      return calcContactTimingFromCallTypes([...firstContactByLead.values()]);
+      // Fetch lead first_seen_date so we can fall back to days-since-lead-created
+      // when the call_type doesn't carry a 9.5x suffix.
+      const leadIds = [...firstContactByLead.keys()];
+      const leadFirstSeen = new Map<string, string>();
+      const CHUNK = 500;
+      for (let i = 0; i < leadIds.length; i += CHUNK) {
+        const chunk = leadIds.slice(i, i + CHUNK);
+        const { data: leadsData, error: leadsErr } = await supabase
+          .from('leads')
+          .select('id, first_seen_date')
+          .in('id', chunk);
+        if (leadsErr) throw leadsErr;
+        for (const l of leadsData ?? []) {
+          if (l.first_seen_date) leadFirstSeen.set(l.id, l.first_seen_date);
+        }
+      }
+
+      const MS_PER_DAY = 1000 * 60 * 60 * 24;
+      const entries: FirstContactEntry[] = [...firstContactByLead.entries()].map(([leadId, c]) => {
+        const seen = leadFirstSeen.get(leadId);
+        let dayDiff: number | null = null;
+        if (seen && c.callDate) {
+          const seenDay = new Date(seen.slice(0, 10) + 'T00:00:00Z').getTime();
+          const callDay = new Date(c.callDate.slice(0, 10) + 'T00:00:00Z').getTime();
+          dayDiff = Math.floor((callDay - seenDay) / MS_PER_DAY);
+        }
+        return { callType: c.callType, dayDiff };
+      });
+
+      return calcContactTiming(entries);
     },
     enabled: isAdmin ? true : !!agencyId,
     staleTime: 30_000,
@@ -598,7 +651,7 @@ export function useDailyTrends(filters: Filters) {
 
       if (effectiveAgencyId) q = q.eq('agency_id', effectiveAgencyId);
       if (from) q = q.gte('call_date', from);
-      if (to) q = q.lte('call_date', to);
+      if (to) q = q.lte('call_date', to + 'T23:59:59');
 
       const { data, error } = await q;
       if (error) throw error;
@@ -606,10 +659,11 @@ export function useDailyTrends(filters: Filters) {
       const byDate = new Map<string, DailyTrendRow>();
       for (const ev of data ?? []) {
         if (!ev.call_date) continue;
-        if (!byDate.has(ev.call_date)) {
-          byDate.set(ev.call_date, { date: ev.call_date, totalCalls: 0, contacts: 0, voicemails: 0, callbacks: 0 });
+        const day = ev.call_date.slice(0, 10);
+        if (!byDate.has(day)) {
+          byDate.set(day, { date: day, totalCalls: 0, contacts: 0, voicemails: 0, callbacks: 0 });
         }
-        const row = byDate.get(ev.call_date)!;
+        const row = byDate.get(day)!;
         row.totalCalls++;
         if (ev.is_contact) row.contacts++;
         if (ev.is_voicemail) row.voicemails++;
