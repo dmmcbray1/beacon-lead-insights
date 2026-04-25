@@ -596,68 +596,18 @@ export async function importDailyCallReport(
   const matchedRows: typeof validRows = [];
   let requoteLeadsCreated = 0;
 
+  // Classify rows: already-matched, eligible for auto-create, or unmatched
+  // (Inserting one-by-one in a loop is too slow for large files — the
+  // Daily Call importer was hitting 5+ minutes of round-trips for big
+  // unmatched sets and stalling the upload at "processing".)
+  const toAutoCreate: typeof validRows = [];
   for (const vr of validRows) {
     if (existingMap.has(vr.phone)) {
       matchedRows.push(vr);
       continue;
     }
-    // Check if this row qualifies for requote auto-creation
     if (shouldAutoCreateRequote(vr.callType, vr.vendorName)) {
-      try {
-        // Guarantee a non-null first_seen_date so the lead remains visible
-        // in date-bounded views (ROI, dashboards) even when the source CSV
-        // had an empty Date column.
-        const seenDate = vr.callDateStr ?? new Date().toISOString().slice(0, 10);
-        const { data: newLead, error: newLeadErr } = await supabase
-          .from('leads')
-          .insert({
-            agency_id: agencyId,
-            normalized_phone: vr.phone,
-            current_lead_type: 're_quote',
-            current_status: '9.1 REQUOTE',
-            latest_vendor_name: vr.vendorName,
-            first_seen_date: seenDate,
-          })
-          .select('id')
-          .single();
-
-        if (newLeadErr || !newLead) {
-          errors.push(`Auto-create requote failed for phone=${vr.phone}: ${newLeadErr?.message ?? 'unknown'}`);
-          unmatchedErrors.push({
-            upload_id: uploadId,
-            row_number: vr.rowNum,
-            error_type: 'phone_not_in_leads',
-            error_message: vr.phone ? `phone=${vr.phone} not found in leads (requote create failed)` : 'phone missing',
-            raw_data: vr.raw,
-          });
-        } else {
-          existingMap.set(vr.phone, {
-            id: (newLead as { id: string }).id,
-            total_call_attempts: 0,
-            total_callbacks: 0,
-            total_voicemails: 0,
-            has_bad_phone: false,
-            first_seen_date: seenDate,
-            first_contact_date: null,
-            first_callback_date: null,
-            first_quote_date: null,
-            first_sold_date: null,
-            first_daily_call_date: null,
-            latest_call_date: null,
-          });
-          matchedRows.push(vr);
-          requoteLeadsCreated++;
-        }
-      } catch (e) {
-        errors.push(`Auto-create requote exception for phone=${vr.phone}: ${String(e)}`);
-        unmatchedErrors.push({
-          upload_id: uploadId,
-          row_number: vr.rowNum,
-          error_type: 'phone_not_in_leads',
-          error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
-          raw_data: vr.raw,
-        });
-      }
+      toAutoCreate.push(vr);
     } else {
       unmatchedErrors.push({
         upload_id: uploadId,
@@ -668,6 +618,88 @@ export async function importDailyCallReport(
       });
     }
   }
+
+  // Bulk-insert auto-create candidates in chunks (deduped by phone — first
+  // occurrence wins). One Supabase round-trip per chunk instead of per row.
+  if (toAutoCreate.length > 0) {
+    const seenPhones = new Set<string>();
+    type DCInsert = {
+      vr: typeof validRows[0];
+      payload: {
+        agency_id: string;
+        normalized_phone: string;
+        current_lead_type: 're_quote';
+        current_status: string;
+        latest_vendor_name: string;
+        first_seen_date: string;
+      };
+    };
+    const inserts: DCInsert[] = [];
+    for (const vr of toAutoCreate) {
+      if (seenPhones.has(vr.phone)) continue;
+      seenPhones.add(vr.phone);
+      const seenDate = vr.callDateStr ?? new Date().toISOString().slice(0, 10);
+      inserts.push({
+        vr,
+        payload: {
+          agency_id: agencyId,
+          normalized_phone: vr.phone,
+          current_lead_type: 're_quote',
+          current_status: '9.1 REQUOTE',
+          latest_vendor_name: vr.vendorName,
+          first_seen_date: seenDate,
+        },
+      });
+    }
+    const INSERT_BATCH = 500;
+    for (let i = 0; i < inserts.length; i += INSERT_BATCH) {
+      const chunk = inserts.slice(i, i + INSERT_BATCH);
+      try {
+        const { data: created, error } = await supabase
+          .from('leads')
+          .insert(chunk.map((c) => c.payload))
+          .select('id, normalized_phone, first_seen_date');
+        if (error) {
+          errors.push(`Batch auto-create failed (rows ${i + 1}-${i + chunk.length}): ${error.message}`);
+          continue;
+        }
+        for (const newLead of created ?? []) {
+          existingMap.set(newLead.normalized_phone, {
+            id: newLead.id,
+            total_call_attempts: 0,
+            total_callbacks: 0,
+            total_voicemails: 0,
+            has_bad_phone: false,
+            first_seen_date: newLead.first_seen_date,
+            first_contact_date: null,
+            first_callback_date: null,
+            first_quote_date: null,
+            first_sold_date: null,
+            first_daily_call_date: null,
+            latest_call_date: null,
+          });
+          requoteLeadsCreated++;
+        }
+      } catch (e) {
+        errors.push(`Batch auto-create exception: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    // Route auto-create rows to matchedRows (success) or unmatchedErrors (failure)
+    for (const vr of toAutoCreate) {
+      if (existingMap.has(vr.phone)) {
+        matchedRows.push(vr);
+      } else {
+        unmatchedErrors.push({
+          upload_id: uploadId,
+          row_number: vr.rowNum,
+          error_type: 'phone_not_in_leads',
+          error_message: vr.phone ? `phone=${vr.phone} not found in leads (requote create failed)` : 'phone missing',
+          raw_data: vr.raw,
+        });
+      }
+    }
+  }
+
   const rowsSkippedUnmatched = unmatchedErrors.length;
 
   // Per-lead accumulated state for leads we're updating this run.
@@ -1106,31 +1138,89 @@ export async function importDeerDamaReport(
   const matchedRows: typeof validRows = [];
   let requoteLeadsCreated = 0;
 
+  // Classify rows: matched vs needs-auto-create. Sequential per-row INSERTs
+  // were stalling Deer Dama imports (2000+ unmatched phones × per-row round
+  // trips → multiple minutes, hitting browser/connection timeouts before
+  // the upload could be marked complete).
+  const toAutoCreate: typeof validRows = [];
   for (const vr of validRows) {
     if (existingPhoneMap.has(vr.phone)) {
       matchedRows.push(vr);
-      continue;
+    } else {
+      toAutoCreate.push(vr);
     }
-    try {
-      // Guarantee a non-null first_seen_date so the lead remains visible
-      // in date-bounded views (ROI, dashboards) even when both Created At
-      // and First Call Date were blank in the CSV.
+  }
+
+  if (toAutoCreate.length > 0) {
+    const seenPhones = new Set<string>();
+    type DDInsert = {
+      vr: typeof validRows[0];
+      payload: {
+        agency_id: string;
+        normalized_phone: string;
+        current_lead_type: 're_quote';
+        current_status: string;
+        latest_vendor_name: string;
+        first_seen_date: string;
+      };
+    };
+    const inserts: DDInsert[] = [];
+    for (const vr of toAutoCreate) {
+      if (seenPhones.has(vr.phone)) continue;
+      seenPhones.add(vr.phone);
+      // Guarantee a non-null first_seen_date so the lead remains visible in
+      // date-bounded views even when both Created At and First Call Date
+      // were blank in the CSV.
       const seenDate = vr.createdAtStr ?? vr.firstCallStr ?? new Date().toISOString().slice(0, 10);
-      const { data: newLead, error: newLeadErr } = await supabase
-        .from('leads')
-        .insert({
+      inserts.push({
+        vr,
+        payload: {
           agency_id: agencyId,
           normalized_phone: vr.phone,
           current_lead_type: 're_quote',
           current_status: vr.leadStatus || '9.1 REQUOTE',
           latest_vendor_name: vr.vendor || 'requote',
           first_seen_date: seenDate,
-        })
-        .select('id')
-        .single();
-
-      if (newLeadErr || !newLead) {
-        errors.push(`Auto-create requote failed for phone=${vr.phone}: ${newLeadErr?.message ?? 'unknown'}`);
+        },
+      });
+    }
+    const INSERT_BATCH = 500;
+    for (let i = 0; i < inserts.length; i += INSERT_BATCH) {
+      const chunk = inserts.slice(i, i + INSERT_BATCH);
+      try {
+        const { data: created, error } = await supabase
+          .from('leads')
+          .insert(chunk.map((c) => c.payload))
+          .select('id, normalized_phone, first_seen_date');
+        if (error) {
+          errors.push(`Batch auto-create failed (rows ${i + 1}-${i + chunk.length}): ${error.message}`);
+          continue;
+        }
+        for (const newLead of created ?? []) {
+          existingPhoneMap.set(newLead.normalized_phone, {
+            id: newLead.id,
+            total_call_attempts: 0,
+            total_callbacks: 0,
+            total_voicemails: 0,
+            has_bad_phone: false,
+            first_seen_date: newLead.first_seen_date,
+            first_contact_date: null,
+            first_callback_date: null,
+            first_quote_date: null,
+            first_sold_date: null,
+            first_daily_call_date: null,
+            latest_call_date: null,
+          });
+          requoteLeadsCreated++;
+        }
+      } catch (e) {
+        errors.push(`Batch auto-create exception: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    for (const vr of toAutoCreate) {
+      if (existingPhoneMap.has(vr.phone)) {
+        matchedRows.push(vr);
+      } else {
         unmatchedErrors.push({
           upload_id: uploadId,
           row_number: vr.rowNum,
@@ -1138,33 +1228,7 @@ export async function importDeerDamaReport(
           error_message: vr.phone ? `phone=${vr.phone} not found in leads (requote create failed)` : 'phone missing',
           raw_data: vr.raw,
         });
-      } else {
-        existingPhoneMap.set(vr.phone, {
-          id: newLead.id,
-          total_call_attempts: 0,
-          total_callbacks: 0,
-          total_voicemails: 0,
-          has_bad_phone: false,
-          first_seen_date: seenDate,
-          first_contact_date: null,
-          first_callback_date: null,
-          first_quote_date: null,
-          first_sold_date: null,
-          first_daily_call_date: null,
-          latest_call_date: null,
-        });
-        matchedRows.push(vr);
-        requoteLeadsCreated++;
       }
-    } catch (e) {
-      errors.push(`Auto-create requote exception for phone=${vr.phone}: ${String(e)}`);
-      unmatchedErrors.push({
-        upload_id: uploadId,
-        row_number: vr.rowNum,
-        error_type: 'phone_not_in_leads',
-        error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
-        raw_data: vr.raw,
-      });
     }
   }
   const rowsSkippedUnmatched = unmatchedErrors.length;
