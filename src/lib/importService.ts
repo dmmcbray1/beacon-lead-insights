@@ -563,13 +563,22 @@ export async function importDailyCallReport(
   // missing from leads, not duplicate-file re-imports.
 
   // ── Requote auto-creation constants ────────────────────────────────────────
+  // Substrings (lowercased) that mark a row as a campaign / requote call.
+  // Includes Shark Tank family, any Cam-Q suffix (with or without spaces),
+  // and inbound calls (which always come from a known caller).
   const REQUOTE_AUTO_CREATE_CALL_TYPES = [
-    'shark tank: requote (6 months) - cam - q',
+    'shark tank',
+    'cam-q',
+    'cam - q',
+    'inbound call',
   ];
   const REQUOTE_AUTO_CREATE_VENDORS = [
     'new-home-to-beacon-territory-list-upload',
     'new-home-priority-list',
     'live-leads-priority-list-uploads',
+    'requote-for-list-uploads',
+    'imported-for-list-uploads',
+    'referrals',
   ];
 
   function shouldAutoCreateRequote(callType: string, vendorName: string): boolean {
@@ -1084,18 +1093,71 @@ export async function importDeerDamaReport(
   const allPhones = [...new Set(validRows.map((r) => r.phone))];
   const existingPhoneMap = await bulkLookupLeadsByPhone(allPhones, agencyId);
 
+  // Deer Dama files are historic customer/lead exports — any phone not yet
+  // in `leads` represents an older lead that should be created as `re_quote`
+  // so the associated call activity has somewhere to attach.
   const unmatchedErrors: UnmatchedError[] = [];
-  const matchedRows = validRows.filter((vr) => {
-    if (existingPhoneMap.has(vr.phone)) return true;
-    unmatchedErrors.push({
-      upload_id: uploadId,
-      row_number: vr.rowNum,
-      error_type: 'phone_not_in_leads',
-      error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
-      raw_data: vr.raw,
-    });
-    return false;
-  });
+  const matchedRows: typeof validRows = [];
+  let requoteLeadsCreated = 0;
+
+  for (const vr of validRows) {
+    if (existingPhoneMap.has(vr.phone)) {
+      matchedRows.push(vr);
+      continue;
+    }
+    try {
+      const seenDate = vr.createdAtStr ?? vr.firstCallStr ?? null;
+      const { data: newLead, error: newLeadErr } = await supabase
+        .from('leads')
+        .insert({
+          agency_id: agencyId,
+          normalized_phone: vr.phone,
+          current_lead_type: 're_quote',
+          current_status: vr.leadStatus || '9.1 REQUOTE',
+          latest_vendor_name: vr.vendor || 'requote',
+          first_seen_date: seenDate,
+        })
+        .select('id')
+        .single();
+
+      if (newLeadErr || !newLead) {
+        errors.push(`Auto-create requote failed for phone=${vr.phone}: ${newLeadErr?.message ?? 'unknown'}`);
+        unmatchedErrors.push({
+          upload_id: uploadId,
+          row_number: vr.rowNum,
+          error_type: 'phone_not_in_leads',
+          error_message: vr.phone ? `phone=${vr.phone} not found in leads (requote create failed)` : 'phone missing',
+          raw_data: vr.raw,
+        });
+      } else {
+        existingPhoneMap.set(vr.phone, {
+          id: newLead.id,
+          total_call_attempts: 0,
+          total_callbacks: 0,
+          total_voicemails: 0,
+          has_bad_phone: false,
+          first_seen_date: seenDate,
+          first_contact_date: null,
+          first_callback_date: null,
+          first_quote_date: null,
+          first_sold_date: null,
+          first_daily_call_date: null,
+          latest_call_date: null,
+        });
+        matchedRows.push(vr);
+        requoteLeadsCreated++;
+      }
+    } catch (e) {
+      errors.push(`Auto-create requote exception for phone=${vr.phone}: ${String(e)}`);
+      unmatchedErrors.push({
+        upload_id: uploadId,
+        row_number: vr.rowNum,
+        error_type: 'phone_not_in_leads',
+        error_message: vr.phone ? `phone=${vr.phone} not found in leads` : 'phone missing',
+        raw_data: vr.raw,
+      });
+    }
+  }
   const rowsSkippedUnmatched = unmatchedErrors.length;
 
   // ── Phase 2: Batch-lookup existing leads (by phone + by external id) ───
@@ -1416,6 +1478,7 @@ export async function importDeerDamaReport(
     newLeads,
     updatedLeads,
     errors: errors.slice(0, 20),
+    requoteLeadsCreated,
   };
 }
 
