@@ -604,6 +604,10 @@ export async function importDailyCallReport(
     // Check if this row qualifies for requote auto-creation
     if (shouldAutoCreateRequote(vr.callType, vr.vendorName)) {
       try {
+        // Guarantee a non-null first_seen_date so the lead remains visible
+        // in date-bounded views (ROI, dashboards) even when the source CSV
+        // had an empty Date column.
+        const seenDate = vr.callDateStr ?? new Date().toISOString().slice(0, 10);
         const { data: newLead, error: newLeadErr } = await supabase
           .from('leads')
           .insert({
@@ -612,7 +616,7 @@ export async function importDailyCallReport(
             current_lead_type: 're_quote',
             current_status: '9.1 REQUOTE',
             latest_vendor_name: vr.vendorName,
-            first_seen_date: vr.callDateStr,
+            first_seen_date: seenDate,
           })
           .select('id')
           .single();
@@ -633,7 +637,7 @@ export async function importDailyCallReport(
             total_callbacks: 0,
             total_voicemails: 0,
             has_bad_phone: false,
-            first_seen_date: vr.callDateStr,
+            first_seen_date: seenDate,
             first_contact_date: null,
             first_callback_date: null,
             first_quote_date: null,
@@ -1108,7 +1112,10 @@ export async function importDeerDamaReport(
       continue;
     }
     try {
-      const seenDate = vr.createdAtStr ?? vr.firstCallStr ?? null;
+      // Guarantee a non-null first_seen_date so the lead remains visible
+      // in date-bounded views (ROI, dashboards) even when both Created At
+      // and First Call Date were blank in the CSV.
+      const seenDate = vr.createdAtStr ?? vr.firstCallStr ?? new Date().toISOString().slice(0, 10);
       const { data: newLead, error: newLeadErr } = await supabase
         .from('leads')
         .insert({
@@ -2132,13 +2139,137 @@ async function collectCandidateLeadIds(uploadIds: string[]): Promise<string[]> {
 }
 
 /**
+ * Recompute the denormalized aggregate fields on `leads` for the candidate
+ * set from the *remaining* rows in `call_events` and `sales_events`. Run
+ * AFTER the upload cascade so the source rows for the deleted upload are
+ * already gone. Without this step the lead row keeps the totals it was
+ * populated with at import time and dashboards (callback rate, voicemail
+ * rate, no-contact rate, single-touch quote %, avg-calls-to-quote, ROI
+ * sold totals, etc.) read stale numbers.
+ */
+async function recalcLeadAggregates(leadIds: string[]): Promise<void> {
+  if (leadIds.length === 0) return;
+  const CHUNK = 500;
+
+  for (let offset = 0; offset < leadIds.length; offset += CHUNK) {
+    const chunk = leadIds.slice(offset, offset + CHUNK);
+
+    const { data: events, error: evErr } = await supabase
+      .from('call_events')
+      .select('lead_id, call_date, is_contact, is_callback, is_quote, is_bad_phone, is_voicemail, current_status, vendor_name')
+      .in('lead_id', chunk);
+    if (evErr) throw new Error('Failed to read call_events for recalc: ' + evErr.message);
+
+    const { data: sales, error: salesErr } = await supabase
+      .from('sales_events')
+      .select('lead_id, sale_date, items, premium')
+      .in('lead_id', chunk);
+    if (salesErr) throw new Error('Failed to read sales_events for recalc: ' + salesErr.message);
+
+    type CallAgg = {
+      total_call_attempts: number;
+      total_callbacks: number;
+      total_voicemails: number;
+      has_bad_phone: boolean;
+      first_contact_date: string | null;
+      first_callback_date: string | null;
+      first_quote_date: string | null;
+      first_daily_call_date: string | null;
+      latest_call_date: string | null;
+      latest_status: string | null;
+      latest_vendor: string | null;
+    };
+    const callAgg = new Map<string, CallAgg>();
+    for (const id of chunk) {
+      callAgg.set(id, {
+        total_call_attempts: 0,
+        total_callbacks: 0,
+        total_voicemails: 0,
+        has_bad_phone: false,
+        first_contact_date: null,
+        first_callback_date: null,
+        first_quote_date: null,
+        first_daily_call_date: null,
+        latest_call_date: null,
+        latest_status: null,
+        latest_vendor: null,
+      });
+    }
+    for (const ev of events ?? []) {
+      const a = callAgg.get(ev.lead_id);
+      if (!a) continue;
+      a.total_call_attempts++;
+      if (ev.is_callback) a.total_callbacks++;
+      if (ev.is_voicemail) a.total_voicemails++;
+      if (ev.is_bad_phone) a.has_bad_phone = true;
+      if (ev.call_date) {
+        if (ev.is_contact && (!a.first_contact_date || ev.call_date < a.first_contact_date)) a.first_contact_date = ev.call_date;
+        if (ev.is_callback && (!a.first_callback_date || ev.call_date < a.first_callback_date)) a.first_callback_date = ev.call_date;
+        if (ev.is_quote && (!a.first_quote_date || ev.call_date < a.first_quote_date)) a.first_quote_date = ev.call_date;
+        if (!a.first_daily_call_date || ev.call_date < a.first_daily_call_date) a.first_daily_call_date = ev.call_date;
+        if (!a.latest_call_date || ev.call_date > a.latest_call_date) {
+          a.latest_call_date = ev.call_date;
+          a.latest_status = ev.current_status ?? a.latest_status;
+          a.latest_vendor = ev.vendor_name ?? a.latest_vendor;
+        }
+      }
+    }
+
+    type SalesAgg = {
+      first_sold_date: string | null;
+      total_items_sold: number;
+      total_policies_sold: number;
+      total_premium: number;
+    };
+    const salesAgg = new Map<string, SalesAgg>();
+    for (const id of chunk) {
+      salesAgg.set(id, { first_sold_date: null, total_items_sold: 0, total_policies_sold: 0, total_premium: 0 });
+    }
+    for (const ev of sales ?? []) {
+      const s = salesAgg.get(ev.lead_id);
+      if (!s) continue;
+      s.total_items_sold += ev.items ?? 0;
+      s.total_policies_sold += 1;
+      s.total_premium += Number(ev.premium) || 0;
+      if (ev.sale_date && (!s.first_sold_date || ev.sale_date < s.first_sold_date)) {
+        s.first_sold_date = ev.sale_date;
+      }
+    }
+
+    for (const id of chunk) {
+      const a = callAgg.get(id)!;
+      const s = salesAgg.get(id)!;
+      const updates: Record<string, unknown> = {
+        total_call_attempts: a.total_call_attempts,
+        total_callbacks: a.total_callbacks,
+        total_voicemails: a.total_voicemails,
+        has_bad_phone: a.has_bad_phone,
+        first_contact_date: a.first_contact_date,
+        first_callback_date: a.first_callback_date,
+        first_quote_date: a.first_quote_date,
+        first_daily_call_date: a.first_daily_call_date,
+        latest_call_date: a.latest_call_date,
+        first_sold_date: s.first_sold_date,
+        total_items_sold: s.total_items_sold,
+        total_policies_sold: s.total_policies_sold,
+        total_premium: s.total_premium,
+      };
+      if (a.latest_status) updates.current_status = a.latest_status;
+      if (a.latest_vendor) updates.latest_vendor_name = a.latest_vendor;
+      const { error } = await supabase.from('leads').update(updates).eq('id', id);
+      if (error) throw new Error(`Failed to recalc lead ${id}: ${error.message}`);
+    }
+  }
+}
+
+/**
  * Delete leads from the candidate set that no longer have any associated
  * activity (call_events, sales_events, lead_staff_history) and were not
  * created by a Ricochet upload. Run AFTER the upload(s) have been deleted
  * so the FK CASCADE has already removed the dependent rows.
  */
-async function deleteOrphanedAutoCreatedLeads(candidateIds: string[]): Promise<void> {
-  if (candidateIds.length === 0) return;
+async function deleteOrphanedAutoCreatedLeads(candidateIds: string[]): Promise<{ deletedIds: string[] }> {
+  if (candidateIds.length === 0) return { deletedIds: [] };
   const CHUNK = 500;
 
   // Filter to non-Ricochet leads only — Ricochet leads stay on Ricochet
@@ -2154,7 +2285,7 @@ async function deleteOrphanedAutoCreatedLeads(candidateIds: string[]): Promise<v
     if (error) throw new Error('Failed to filter leads for cleanup: ' + error.message);
     for (const row of data ?? []) eligible.push(row.id);
   }
-  if (eligible.length === 0) return;
+  if (eligible.length === 0) return { deletedIds: [] };
 
   // Find leads that still have any remaining activity — keep them.
   const stillReferenced = new Set<string>();
@@ -2184,13 +2315,14 @@ async function deleteOrphanedAutoCreatedLeads(candidateIds: string[]): Promise<v
   }
 
   const toDelete = eligible.filter((id) => !stillReferenced.has(id));
-  if (toDelete.length === 0) return;
+  if (toDelete.length === 0) return { deletedIds: [] };
 
   for (let i = 0; i < toDelete.length; i += CHUNK) {
     const chunk = toDelete.slice(i, i + CHUNK);
     const { error } = await supabase.from('leads').delete().in('id', chunk);
     if (error) throw new Error('Failed to delete orphaned leads: ' + error.message);
   }
+  return { deletedIds: toDelete };
 }
 
 export async function deleteUpload(uploadId: string): Promise<void> {
@@ -2202,7 +2334,11 @@ export async function deleteUpload(uploadId: string): Promise<void> {
   const { error } = await supabase.from('uploads').delete().eq('id', uploadId);
   if (error) throw new Error('Failed to delete upload: ' + error.message);
   // Drop any auto-created Daily Call / Deer Dama leads now left orphaned
-  await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
+  const { deletedIds } = await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
+  // Recompute denormalized aggregates on surviving leads so dashboards don't
+  // read stale counters left over from the deleted upload.
+  const deletedSet = new Set(deletedIds);
+  await recalcLeadAggregates(candidateLeadIds.filter((id) => !deletedSet.has(id)));
 }
 
 /**
@@ -2290,5 +2426,9 @@ export async function deleteBatch(batchId: string): Promise<void> {
   const { error } = await supabase.from('uploads').delete().eq('batch_id', batchId);
   if (error) throw new Error('Failed to delete upload batch: ' + error.message);
   // Drop any auto-created Daily Call / Deer Dama leads now left orphaned
-  await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
+  const { deletedIds } = await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
+  // Recompute denormalized aggregates on surviving leads so dashboards don't
+  // read stale counters left over from the deleted batch.
+  const deletedSet = new Set(deletedIds);
+  await recalcLeadAggregates(candidateLeadIds.filter((id) => !deletedSet.has(id)));
 }
