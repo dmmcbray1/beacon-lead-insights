@@ -25,6 +25,7 @@ import {
   importBatch,
   resumeBatch,
   clearAllSalesData,
+  clearStuckUploads,
   BatchRollbackError,
   type BatchProgress,
   type BatchResult,
@@ -134,6 +135,29 @@ export default function UploadCenter() {
   const [ricochetErrorsModalOpen, setRicochetErrorsModalOpen] = useState(false);
 
   // ── Clear Sales Data state ────────────────────────────────────────────────
+  const [clearStuckOpen, setClearStuckOpen] = useState(false);
+  const [clearStuckRunning, setClearStuckRunning] = useState(false);
+  const [clearStuckResult, setClearStuckResult] = useState<{ uploadsCleared: number; batchesCleared: number } | null>(null);
+  const [clearStuckError, setClearStuckError] = useState<string | null>(null);
+
+  const handleClearStuckUploads = async () => {
+    if (!agencyId) return;
+    setClearStuckRunning(true);
+    setClearStuckError(null);
+    setClearStuckResult(null);
+    try {
+      const res = await clearStuckUploads(agencyId);
+      setClearStuckResult({ uploadsCleared: res.uploadsCleared, batchesCleared: res.batchesCleared });
+      if (res.errors.length > 0) setClearStuckError(res.errors.join('; '));
+      await queryClient.invalidateQueries({ queryKey: ['uploads'] });
+    } catch (err) {
+      setClearStuckError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClearStuckRunning(false);
+      setClearStuckOpen(false);
+    }
+  };
+
   const [clearSalesOpen, setClearSalesOpen] = useState(false);
   const [clearSalesRunning, setClearSalesRunning] = useState(false);
   const [clearSalesResult, setClearSalesResult] = useState<
@@ -758,10 +782,60 @@ export default function UploadCenter() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog open={clearStuckOpen} onOpenChange={setClearStuckOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear stuck uploads?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Removes any upload rows for your agency that have been in
+              "processing" state for more than 5 minutes. Cascade deletes
+              their child rows (call_events, lead_staff_history, sales_events)
+              and any auto-created leads they orphan. In-flight imports newer
+              than 5 minutes are preserved.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearStuckUploads}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Clear stuck uploads
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ── Recent Uploads ────────────────────────────────────────────────── */}
       {state.step === 'select' && (
         <div className="mt-8">
-          <h3 className="section-title mb-4">Recent Uploads</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="section-title">Recent Uploads</h3>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClearStuckOpen(true)}
+              disabled={!agencyId || clearStuckRunning}
+            >
+              {clearStuckRunning ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Clearing…</>
+              ) : (
+                <><Trash2 className="w-4 h-4 mr-2" />Clear Stuck Uploads</>
+              )}
+            </Button>
+          </div>
+          {clearStuckResult && (
+            <div className="mb-3 rounded-md border border-success/50 bg-success/10 px-3 py-2 text-xs text-foreground">
+              Cleared {clearStuckResult.uploadsCleared} stuck upload
+              {clearStuckResult.uploadsCleared === 1 ? '' : 's'}
+              {clearStuckResult.batchesCleared > 0 ? ` (${clearStuckResult.batchesCleared} batch${clearStuckResult.batchesCleared === 1 ? '' : 'es'})` : ''}.
+            </div>
+          )}
+          {clearStuckError && (
+            <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {clearStuckError}
+            </div>
+          )}
           <div className="bg-card border rounded-lg overflow-hidden">
             <table className="w-full text-sm">
               <thead>

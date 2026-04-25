@@ -111,7 +111,9 @@ export class BatchRollbackError extends Error {
   ) {
     super(
       `Batch failed on ${failedFile}: ${originalError.message}` +
-        (rollbackError ? ` (rollback also failed: ${rollbackError.message})` : ''),
+        (rollbackError
+          ? ` — rollback also failed (${rollbackError.message}). Some upload rows may remain in "processing" state; use Clear Stuck Uploads in the Upload Center to remove them.`
+          : ''),
     );
     this.name = 'BatchRollbackError';
   }
@@ -2147,6 +2149,73 @@ export async function deleteUpload(uploadId: string): Promise<void> {
  * Delete both uploads in a batch in one query. Used by the Upload Center
  * trash button and by importBatch's rollback path.
  */
+/**
+ * Find uploads stuck in `processing` status (older than `olderThanMinutes`)
+ * for the given agency and clean them up via the standard delete paths so
+ * orphaned auto-created leads, sales_events, etc. also get removed. Returns
+ * a count of upload rows cleared.
+ *
+ * 5-minute default avoids clearing an in-flight upload from another tab —
+ * typical imports finish in seconds, so anything older is reliably stuck.
+ */
+export async function clearStuckUploads(
+  agencyId: string,
+  olderThanMinutes = 5,
+): Promise<{ uploadsCleared: number; batchesCleared: number; errors: string[] }> {
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000).toISOString();
+  const errors: string[] = [];
+
+  const { data: stuck, error: stuckErr } = await supabase
+    .from('uploads')
+    .select('id, batch_id')
+    .eq('agency_id', agencyId)
+    .eq('status', 'processing')
+    .lt('created_at', cutoff);
+  if (stuckErr) {
+    throw new Error('Failed to read stuck uploads: ' + stuckErr.message);
+  }
+
+  const rows = stuck ?? [];
+  if (rows.length === 0) return { uploadsCleared: 0, batchesCleared: 0, errors: [] };
+
+  const batchIds = new Set<string>();
+  const singletonIds: string[] = [];
+  for (const r of rows) {
+    if (r.batch_id) batchIds.add(r.batch_id);
+    else singletonIds.push(r.id);
+  }
+
+  let uploadsCleared = 0;
+  let batchesCleared = 0;
+
+  for (const batchId of batchIds) {
+    try {
+      // Count uploads in this batch (including any siblings) before deleting
+      // so the reported number matches what was actually removed.
+      const { count } = await supabase
+        .from('uploads')
+        .select('id', { count: 'exact', head: true })
+        .eq('batch_id', batchId);
+      await deleteBatch(batchId);
+      batchesCleared++;
+      uploadsCleared += count ?? 0;
+    } catch (e) {
+      errors.push(`Batch ${batchId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  for (const uploadId of singletonIds) {
+    try {
+      await deleteUpload(uploadId);
+      uploadsCleared++;
+    } catch (e) {
+      errors.push(`Upload ${uploadId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return { uploadsCleared, batchesCleared, errors };
+}
+
 export async function deleteBatch(batchId: string): Promise<void> {
   // Find all upload IDs in this batch first for sales cleanup
   const { data: batchUploads } = await supabase
