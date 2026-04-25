@@ -2038,11 +2038,109 @@ export async function clearAllSalesData(agencyId: string): Promise<{
   };
 }
 
+/**
+ * Collect lead_ids touched by these uploads via call_events or
+ * lead_staff_history. Used as the candidate set for orphan-lead cleanup
+ * after an upload is deleted (Daily Call / Deer Dama auto-creates).
+ */
+async function collectCandidateLeadIds(uploadIds: string[]): Promise<string[]> {
+  if (uploadIds.length === 0) return [];
+
+  const ids = new Set<string>();
+
+  const { data: callRows, error: callErr } = await supabase
+    .from('call_events')
+    .select('lead_id')
+    .in('source_upload_id', uploadIds);
+  if (callErr) throw new Error('Failed to read call_events for cleanup: ' + callErr.message);
+  for (const r of callRows ?? []) {
+    if (r.lead_id) ids.add(r.lead_id);
+  }
+
+  const { data: histRows, error: histErr } = await supabase
+    .from('lead_staff_history')
+    .select('lead_id')
+    .in('source_upload_id', uploadIds);
+  if (histErr) throw new Error('Failed to read lead_staff_history for cleanup: ' + histErr.message);
+  for (const r of histRows ?? []) {
+    if (r.lead_id) ids.add(r.lead_id);
+  }
+
+  return [...ids];
+}
+
+/**
+ * Delete leads from the candidate set that no longer have any associated
+ * activity (call_events, sales_events, lead_staff_history) and were not
+ * created by a Ricochet upload. Run AFTER the upload(s) have been deleted
+ * so the FK CASCADE has already removed the dependent rows.
+ */
+async function deleteOrphanedAutoCreatedLeads(candidateIds: string[]): Promise<void> {
+  if (candidateIds.length === 0) return;
+  const CHUNK = 500;
+
+  // Filter to non-Ricochet leads only — Ricochet leads stay on Ricochet
+  // upload delete (FK is SET NULL, not CASCADE).
+  const eligible: string[] = [];
+  for (let i = 0; i < candidateIds.length; i += CHUNK) {
+    const chunk = candidateIds.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from('leads')
+      .select('id')
+      .in('id', chunk)
+      .is('ricochet_source_upload_id', null);
+    if (error) throw new Error('Failed to filter leads for cleanup: ' + error.message);
+    for (const row of data ?? []) eligible.push(row.id);
+  }
+  if (eligible.length === 0) return;
+
+  // Find leads that still have any remaining activity — keep them.
+  const stillReferenced = new Set<string>();
+  for (let i = 0; i < eligible.length; i += CHUNK) {
+    const chunk = eligible.slice(i, i + CHUNK);
+
+    const { data: calls, error: callErr } = await supabase
+      .from('call_events')
+      .select('lead_id')
+      .in('lead_id', chunk);
+    if (callErr) throw new Error('Failed to count call_events for cleanup: ' + callErr.message);
+    for (const r of calls ?? []) if (r.lead_id) stillReferenced.add(r.lead_id);
+
+    const { data: sales, error: salesErr } = await supabase
+      .from('sales_events')
+      .select('lead_id')
+      .in('lead_id', chunk);
+    if (salesErr) throw new Error('Failed to count sales_events for cleanup: ' + salesErr.message);
+    for (const r of sales ?? []) if (r.lead_id) stillReferenced.add(r.lead_id);
+
+    const { data: hist, error: histErr } = await supabase
+      .from('lead_staff_history')
+      .select('lead_id')
+      .in('lead_id', chunk);
+    if (histErr) throw new Error('Failed to count lead_staff_history for cleanup: ' + histErr.message);
+    for (const r of hist ?? []) if (r.lead_id) stillReferenced.add(r.lead_id);
+  }
+
+  const toDelete = eligible.filter((id) => !stillReferenced.has(id));
+  if (toDelete.length === 0) return;
+
+  for (let i = 0; i < toDelete.length; i += CHUNK) {
+    const chunk = toDelete.slice(i, i + CHUNK);
+    const { error } = await supabase.from('leads').delete().in('id', chunk);
+    if (error) throw new Error('Failed to delete orphaned leads: ' + error.message);
+  }
+}
+
 export async function deleteUpload(uploadId: string): Promise<void> {
-  // Clean up sales_events and auto-created leads first
+  // Capture lead candidates BEFORE delete so we can check them after the
+  // cascade removes call_events / lead_staff_history rows.
+  const candidateLeadIds = await collectCandidateLeadIds([uploadId]);
+  // Clean up sales_events and auto-created sales leads first
   await deleteSalesLogData([uploadId]);
   const { error } = await supabase.from('uploads').delete().eq('id', uploadId);
   if (error) throw new Error('Failed to delete upload: ' + error.message);
+  // Drop any auto-created Daily Call / Deer Dama leads now left orphaned
+  await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
 }
 
 /**
@@ -2056,8 +2154,12 @@ export async function deleteBatch(batchId: string): Promise<void> {
     .select('id')
     .eq('batch_id', batchId);
   const uploadIds = (batchUploads ?? []).map((u: { id: string }) => u.id);
+  // Capture lead candidates BEFORE delete so we can check them after cascade.
+  const candidateLeadIds = await collectCandidateLeadIds(uploadIds);
   await deleteSalesLogData(uploadIds);
 
   const { error } = await supabase.from('uploads').delete().eq('batch_id', batchId);
   if (error) throw new Error('Failed to delete upload batch: ' + error.message);
+  // Drop any auto-created Daily Call / Deer Dama leads now left orphaned
+  await deleteOrphanedAutoCreatedLeads(candidateLeadIds);
 }
